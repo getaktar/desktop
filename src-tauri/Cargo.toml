@@ -1,10 +1,10 @@
 [package]
 name = "aktar"
-version = "0.14.0"
+version = "0.15.0"
 description = "Upload files to your own S3-compatible storage from the Windows tray"
 authors = ["Mert Topuz"]
 license = "MIT"
-repository = "https://github.com/getaktar/windows"
+repository = "https://github.com/getaktar/desktop"
 edition = "2021"
 rust-version = "1.88"
 

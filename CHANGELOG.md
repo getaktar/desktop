@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-16
+
 ### Added
 
 - Linux: the same app as a .deb, an .rpm and an AppImage (x86_64), built
@@ -28,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Wayland desktops with data control (Plasma, Sway, Hyprland) the
   clipboard is the Wayland one; GNOME's goes through XWayland, which
   Mutter keeps in step
+
+### Changed
+
+- The repository is now github.com/getaktar/desktop (it was
+  getaktar/windows; the old links redirect). Installed copies look for
+  updates there.
 
 ### Fixed
 

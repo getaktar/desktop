@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aktar",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "identifier": "com.getaktar.windows",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -82,7 +82,7 @@
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczQUIwQ0Q3Q0IwMjY2MTkKUldRWlpnTEwxd3lyYzlLRmNEUTFQVFpxblo4T1hmWGZaR3ZpdnVLNExEUnFBdzZPUkx0ZGk1NVUK",
-      "endpoints": ["https://github.com/getaktar/windows/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/getaktar/desktop/releases/latest/download/latest.json"],
       "windows": {
         "installMode": "passive"
       }

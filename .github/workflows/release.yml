@@ -78,7 +78,7 @@ jobs:
         shell: pwsh
         run: ./scripts/check_binary.ps1 -Path src-tauri/target/release/aktar.exe
 
-      # A stable name, so https://github.com/getaktar/windows/releases/latest/download/Aktar-Setup.exe
+      # A stable name, so https://github.com/getaktar/desktop/releases/latest/download/Aktar-Setup.exe
       # always points at the newest installer.
       - name: Upload Aktar-Setup.exe
         shell: bash
