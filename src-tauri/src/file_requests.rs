@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{events, SharedCore};
-use crate::destinations::DestinationConfig;
+use crate::destinations::{DestinationConfig, ProviderPreset};
 use crate::storage::{S3Provider, StorageError};
 use crate::t;
 use crate::uploads::{JobState, RequestSource, UploadInput};
@@ -250,6 +250,62 @@ fn covers(rule: &CorsRule, wanted: &CorsRule) -> bool {
         && has_all(&rule.expose_headers, &wanted.expose_headers)
 }
 
+/// The headers the page sends with each PUT, lowercased: `if-none-match`
+/// only when the slots are conditional.
+pub fn preflight_request_headers(conditional: bool) -> Vec<&'static str> {
+    if conditional {
+        vec!["content-type", "if-none-match"]
+    } else {
+        vec!["content-type"]
+    }
+}
+
+/// Whether a CORS preflight reply lets a page on `origin` PUT with
+/// `request_headers`: a 2xx answer whose Allow-Origin is the origin (or
+/// `*`), whose Allow-Methods has PUT (or `*`) and whose Allow-Headers has
+/// every header (or `*`). Header names are matched case-insensitively.
+pub fn preflight_allows(status: u16, headers: &[(String, String)], origin: &str, request_headers: &[&str]) -> bool {
+    if !(200..300).contains(&status) {
+        return false;
+    }
+    fn values<'a>(headers: &'a [(String, String)], name: &'a str) -> impl Iterator<Item = &'a str> {
+        headers.iter().filter(move |(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
+    }
+    let list = |name: &str| -> HashSet<String> {
+        values(headers, name)
+            .flat_map(|value| value.split(','))
+            .map(|item| item.trim().to_ascii_lowercase())
+            .filter(|item| !item.is_empty())
+            .collect()
+    };
+    let allowed_origin = values(headers, "Access-Control-Allow-Origin").next().map(str::trim);
+    if !matches!(allowed_origin, Some(allowed) if allowed == "*" || allowed == origin) {
+        return false;
+    }
+    let methods = list("Access-Control-Allow-Methods");
+    if !methods.contains("*") && !methods.contains("put") {
+        return false;
+    }
+    let allowed_headers = list("Access-Control-Allow-Headers");
+    allowed_headers.contains("*") || request_headers.iter().all(|header| allowed_headers.contains(&header.to_ascii_lowercase()))
+}
+
+/// What to add to the CORS message when the key may not change the
+/// bucket's settings (an R2 "Object Read & Write" key): where to add the
+/// rule by hand. None for any other failure (MinIO has no bucket CORS).
+pub fn cors_hint(error: &StorageError, preset: ProviderPreset, bucket: &str) -> Option<String> {
+    match error {
+        StorageError::AccessDenied | StorageError::LifecycleNotAllowed => Some(match preset {
+            ProviderPreset::CloudflareR2 => t!(
+                "This key can’t change the bucket’s settings, so Aktar couldn’t add the rule itself. In the Cloudflare dashboard, open R2 > {0} > Settings > CORS Policy, add the rule below, then choose Create Link.",
+                bucket
+            ),
+            _ => t!("This key can’t change the bucket’s settings, so Aktar couldn’t add the rule itself. Add the rule below in your provider’s dashboard, then choose Create Link."),
+        }),
+        _ => None,
+    }
+}
+
 /// The origin a URL is served from.
 pub fn origin_of(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
@@ -317,12 +373,12 @@ pub async fn create(core: &SharedCore, new: NewRequest) -> Result<FileRequest, C
     }
     let credentials = crate::credentials::load(&destination.id).map_err(|error| error.to_string())?;
     let provider = S3Provider::new(destination.clone(), credentials);
-    ensure_cors(core, &provider, &destination).await?;
-
     let id = new_id();
+    let conditional = destination.preset.supports_conditional_writes();
+    ensure_cors(core, &provider, &destination, &slot_keys(&id, 1).0, conditional).await?;
+
     let now = crate::util::now_millis();
     let expires = now + new.seconds as i64 * 1000;
-    let conditional = destination.preset.supports_conditional_writes();
     let mut slots = Vec::new();
     for index in 1..=new.slot_count {
         let (file_key, meta_key) = slot_keys(&id, index);
@@ -361,27 +417,36 @@ pub async fn create(core: &SharedCore, new: NewRequest) -> Result<FileRequest, C
 }
 
 /// Adds Aktar's CORS rule when the page will upload to another origin,
-/// once per destination and origin.
-async fn ensure_cors(core: &SharedCore, provider: &S3Provider, destination: &DestinationConfig) -> Result<(), CreateError> {
+/// once per destination and origin. When the key may not read or write
+/// the bucket's CORS rules, the rule may still be there (added in the
+/// provider's dashboard): a browser's preflight to `file_key` decides.
+async fn ensure_cors(core: &SharedCore, provider: &S3Provider, destination: &DestinationConfig, file_key: &str, conditional: bool) -> Result<(), CreateError> {
     let (Some(page), Some(target)) = (page_origin(destination), crate::storage::object_origin(destination)) else {
         return Err(t!("The endpoint URL is not valid.").into());
     };
     if page == target || destination.request_cors_origin.as_deref() == Some(page.as_str()) {
         return Ok(());
     }
-    let refused = |page: &str| CreateError::Cors {
-        message: t!("This bucket doesn’t let browsers upload to it. Allow PUT from {0} in its CORS settings, then try again.", page),
-        rule: serde_json::to_string_pretty(&[request_rule(page)]).unwrap_or_default(),
+    let result = match provider.bucket_cors().await {
+        Ok(existing) => match merged_cors(&existing, &page) {
+            Some(rules) => provider.set_bucket_cors(&rules).await.inspect_err(|error| log::info!("Could not set the bucket's CORS rules: {error}")),
+            None => Ok(()),
+        },
+        Err(error) => {
+            log::info!("Could not read the bucket's CORS rules: {error}");
+            Err(error)
+        }
     };
-    let existing = provider.bucket_cors().await.map_err(|error| {
-        log::info!("Could not read the bucket's CORS rules: {error}");
-        refused(&page)
-    })?;
-    if let Some(rules) = merged_cors(&existing, &page) {
-        provider.set_bucket_cors(&rules).await.map_err(|error| {
-            log::info!("Could not set the bucket's CORS rules: {error}");
-            refused(&page)
-        })?;
+    if let Err(error) = result {
+        if !provider.allows_browser_put(&page, file_key, conditional).await {
+            let mut message = t!("This bucket doesn’t let browsers upload to it. Allow PUT from {0} in its CORS settings, then try again.", page);
+            if let Some(hint) = cors_hint(&error, destination.preset, &destination.bucket) {
+                message.push_str("\n\n");
+                message.push_str(&hint);
+            }
+            return Err(CreateError::Cors { message, rule: serde_json::to_string_pretty(&[request_rule(&page)]).unwrap_or_default() });
+        }
+        log::info!("The bucket's CORS rules couldn't be checked, but a browser's preflight from {page} passes");
     }
     core.destinations.modify(&destination.id, |saved| saved.request_cors_origin = Some(page.clone()));
     core.notify(events::DESTINATIONS_CHANGED);
@@ -673,6 +738,66 @@ mod tests {
             json,
             r#"{"ID":"aktar-file-requests","AllowedOrigins":["https://cdn.example.com"],"AllowedMethods":["PUT"],"AllowedHeaders":["content-type","if-none-match"],"ExposeHeaders":["etag"],"MaxAgeSeconds":3600}"#
         );
+    }
+
+    fn reply(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+    }
+
+    #[test]
+    fn reads_preflight_replies() {
+        let origin = "https://cdn.example.com";
+        let both = preflight_request_headers(true);
+        let plain = preflight_request_headers(false);
+        assert_eq!(both, ["content-type", "if-none-match"]);
+        assert_eq!(plain, ["content-type"]);
+        let full = reply(&[
+            ("Access-Control-Allow-Origin", origin),
+            ("Access-Control-Allow-Methods", "PUT"),
+            ("Access-Control-Allow-Headers", "content-type,if-none-match"),
+        ]);
+        assert!(preflight_allows(200, &full, origin, &both));
+        // Names and values in any case, lists with spaces.
+        let mixed = reply(&[
+            ("access-control-allow-origin", origin),
+            ("ACCESS-CONTROL-ALLOW-METHODS", "GET, put"),
+            ("Access-Control-Allow-Headers", "Content-Type, If-None-Match"),
+        ]);
+        assert!(preflight_allows(204, &mixed, origin, &both));
+        // Wildcards.
+        let wildcards = reply(&[("Access-Control-Allow-Origin", "*"), ("Access-Control-Allow-Methods", "*"), ("Access-Control-Allow-Headers", "*")]);
+        assert!(preflight_allows(200, &wildcards, origin, &both));
+        // Content-Type alone is enough when the slots aren't conditional.
+        let content_type = reply(&[("Access-Control-Allow-Origin", origin), ("Access-Control-Allow-Methods", "PUT"), ("Access-Control-Allow-Headers", "content-type")]);
+        assert!(preflight_allows(200, &content_type, origin, &plain));
+        assert!(!preflight_allows(200, &content_type, origin, &both));
+
+        // Refusals.
+        assert!(!preflight_allows(400, &[], origin, &plain));
+        assert!(!preflight_allows(403, &full, origin, &both));
+        let other_origin = reply(&[
+            ("Access-Control-Allow-Origin", "https://example.com"),
+            ("Access-Control-Allow-Methods", "PUT"),
+            ("Access-Control-Allow-Headers", "content-type,if-none-match"),
+        ]);
+        assert!(!preflight_allows(200, &other_origin, origin, &both));
+        let get_only = reply(&[("Access-Control-Allow-Origin", origin), ("Access-Control-Allow-Methods", "GET, HEAD"), ("Access-Control-Allow-Headers", "*")]);
+        assert!(!preflight_allows(200, &get_only, origin, &both));
+        let no_origin = reply(&[("Access-Control-Allow-Methods", "PUT"), ("Access-Control-Allow-Headers", "*")]);
+        assert!(!preflight_allows(200, &no_origin, origin, &both));
+        let no_headers = reply(&[("Access-Control-Allow-Origin", origin), ("Access-Control-Allow-Methods", "PUT")]);
+        assert!(!preflight_allows(200, &no_headers, origin, &plain));
+    }
+
+    #[test]
+    fn hints_where_to_add_the_rule() {
+        let r2 = cors_hint(&StorageError::AccessDenied, ProviderPreset::CloudflareR2, "files").unwrap();
+        assert!(r2.contains("R2 > files > Settings > CORS Policy"), "{r2}");
+        let other = cors_hint(&StorageError::LifecycleNotAllowed, ProviderPreset::AmazonS3, "files").unwrap();
+        assert!(other.contains("your provider’s dashboard") && !other.contains("Cloudflare"), "{other}");
+        assert_eq!(cors_hint(&StorageError::LifecycleUnsupported, ProviderPreset::CloudflareR2, "files"), None);
+        assert_eq!(cors_hint(&StorageError::Unknown("NotImplemented".into()), ProviderPreset::AmazonS3, "files"), None);
+        assert_eq!(cors_hint(&StorageError::Connection("refused".into()), ProviderPreset::CloudflareR2, "files"), None);
     }
 
     #[test]

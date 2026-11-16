@@ -918,6 +918,35 @@ impl S3Provider {
     }
 }
 
+impl S3Provider {
+    /// Whether browsers on `origin` may already PUT `object_key`: the
+    /// preflight a browser sends before a file request's upload (see
+    /// `file_requests::preflight_allows`), to the same URL the presigned
+    /// PUT targets. Unsigned, like the browser's. False when there's no
+    /// answer.
+    pub async fn allows_browser_put(&self, origin: &str, object_key: &str, conditional: bool) -> bool {
+        let Ok(signed) = self.presigned_put(object_key, "application/octet-stream", conditional, 60).await else { return false };
+        let Ok(mut url) = url::Url::parse(&signed) else { return false };
+        url.set_query(None);
+        let request_headers = crate::file_requests::preflight_request_headers(conditional);
+        let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(20)).build() else { return false };
+        let response = client
+            .request(reqwest::Method::OPTIONS, url)
+            .header("Origin", origin)
+            .header("Access-Control-Request-Method", "PUT")
+            .header("Access-Control-Request-Headers", request_headers.join(","))
+            .send()
+            .await;
+        let Ok(response) = response else { return false };
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.as_str().to_string(), value.to_str().ok()?.to_string())))
+            .collect();
+        crate::file_requests::preflight_allows(response.status().as_u16(), &headers, origin, &request_headers)
+    }
+}
+
 /// Where the S3 endpoint serves this bucket's objects from, as an origin
 /// (`https://bucket.s3.example.com`, or the endpoint itself path-style):
 /// where presigned links go.

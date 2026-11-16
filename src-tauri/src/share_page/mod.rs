@@ -15,7 +15,7 @@ pub const TEMPLATE: &str = include_str!("../../resources/share-page.html");
 /// SHA-256 of `TEMPLATE`, as `shasum -a 256 docs/share-page/template.html`
 /// prints it in the Mac repo.
 #[cfg(test)]
-const TEMPLATE_SHA256: &str = "f8fc8be762b53c2ea8c83f11ad23cfaf2f5d0ad2109334db54c7a93e756aea93";
+const TEMPLATE_SHA256: &str = "d8e74e2f4b2df7e10f45de988d02f086c57b028842e67c2198be53f36e0ba777";
 
 /// How a page is uploaded: it opens in the browser (no
 /// Content-Disposition), and isn't cached for long, since Replace File

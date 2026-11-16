@@ -156,7 +156,7 @@ export function RequestFilesDialog({ open, onClose }: { open: boolean; onClose: 
                 {error && (
                   <MessageBar intent="error" layout="multiline">
                     <MessageBarBody>
-                      {error.message}
+                      <div className="request-error">{error.message}</div>
                       {error.kind === "cors" && <pre className="request-rule selectable">{error.rule}</pre>}
                     </MessageBarBody>
                   </MessageBar>

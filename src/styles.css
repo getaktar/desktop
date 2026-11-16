@@ -1487,6 +1487,10 @@ body {
   gap: 8px;
 }
 
+.request-error {
+  white-space: pre-line;
+}
+
 .request-rule {
   margin: 8px 0 0;
   font-size: 12px;

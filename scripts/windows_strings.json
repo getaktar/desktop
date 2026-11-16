@@ -7406,5 +7406,42 @@
     "ru": "Не удалось переместить {0} в корзину. {1}",
     "uk": "Не вдалося перемістити {0} у кошик. {1}",
     "pl": "Nie udało się przenieść {0} do kosza. {1}"
+  },
+  "// File request CORS hint": "Appended to the CORS message when the key may not change bucket settings. The Mac app says 'I Added the Rule' (a button Windows doesn't have); here the user adds the rule and chooses Create Link again.",
+  "This key can’t change the bucket’s settings, so Aktar couldn’t add the rule itself. Add the rule below in your provider’s dashboard, then choose Create Link.": {
+    "tr": "Bu anahtar bucket'ın ayarlarını değiştiremiyor, bu yüzden Aktar kuralı kendisi ekleyemedi. Aşağıdaki kuralı sağlayıcınızın panelinden ekleyin, sonra Bağlantı Oluştur'u seçin.",
+    "de": "Dieser Schlüssel kann die Einstellungen des Buckets nicht ändern, deshalb konnte Aktar die Regel nicht selbst hinzufügen. Füge die Regel unten im Dashboard deines Anbieters hinzu und wähle dann „Link erstellen“.",
+    "fr": "Cette clé ne peut pas modifier les réglages du bucket, Aktar n’a donc pas pu ajouter la règle lui-même. Ajoutez la règle ci-dessous dans le tableau de bord de votre fournisseur, puis choisissez « Créer le lien ».",
+    "es": "Esta clave no puede cambiar los ajustes del bucket, así que Aktar no pudo añadir la regla. Añade la regla de abajo en el panel de tu proveedor y elige «Crear enlace».",
+    "pt-BR": "Esta chave não pode alterar as configurações do bucket, então o Aktar não conseguiu adicionar a regra. Adicione a regra abaixo no painel do seu provedor e escolha “Criar link”.",
+    "ja": "このキーではバケットの設定を変更できないため、Aktar はルールを追加できませんでした。プロバイダのダッシュボードで下のルールを追加してから「リンクを作成」を選んでください。",
+    "zh-Hans": "此密钥无法更改存储桶的设置，因此 Aktar 无法自行添加规则。请在服务商的控制台中添加下面的规则，然后选择“创建链接”。",
+    "zh-Hant": "此金鑰無法變更儲存貯體的設定，因此 Aktar 無法自行加入規則。請在供應商的主控台加入下方的規則，然後選擇「建立連結」。",
+    "ko": "이 키로는 버킷 설정을 바꿀 수 없어 Aktar가 규칙을 직접 추가하지 못했습니다. 제공업체 대시보드에서 아래 규칙을 추가한 뒤 ‘링크 만들기’를 선택하세요.",
+    "it": "Questa chiave non può modificare le impostazioni del bucket, quindi Aktar non ha potuto aggiungere la regola da solo. Aggiungi la regola qui sotto nella dashboard del tuo provider, poi scegli «Crea link».",
+    "nl": "Deze sleutel kan de instellingen van de bucket niet wijzigen, dus Aktar kon de regel niet zelf toevoegen. Voeg de regel hieronder toe in het dashboard van je provider en kies dan ‘Maak link’.",
+    "pl": "Ten klucz nie może zmieniać ustawień bucketu, więc Aktar nie mógł sam dodać reguły. Dodaj poniższą regułę w panelu dostawcy, a potem wybierz „Utwórz link”.",
+    "ru": "Этот ключ не может менять настройки бакета, поэтому Aktar не смог добавить правило сам. Добавьте правило ниже в панели вашего провайдера и выберите «Создать ссылку».",
+    "uk": "Цей ключ не може змінювати налаштування бакета, тому Aktar не зміг додати правило сам. Додайте правило нижче в панелі вашого провайдера й виберіть «Створити посилання».",
+    "id": "Kunci ini tidak bisa mengubah pengaturan bucket, jadi Aktar tidak bisa menambahkan aturan itu sendiri. Tambahkan aturan di bawah di dasbor penyedia Anda, lalu pilih Buat Tautan.",
+    "vi": "Khóa này không thể thay đổi cài đặt của bucket, nên Aktar không tự thêm quy tắc được. Thêm quy tắc bên dưới trong bảng điều khiển của nhà cung cấp rồi chọn Tạo liên kết."
+  },
+  "This key can’t change the bucket’s settings, so Aktar couldn’t add the rule itself. In the Cloudflare dashboard, open R2 > {0} > Settings > CORS Policy, add the rule below, then choose Create Link.": {
+    "tr": "Bu anahtar bucket'ın ayarlarını değiştiremiyor, bu yüzden Aktar kuralı kendisi ekleyemedi. Cloudflare panelinde R2 > {0} > Settings > CORS Policy bölümünü açın, aşağıdaki kuralı ekleyin, sonra Bağlantı Oluştur'u seçin.",
+    "de": "Dieser Schlüssel kann die Einstellungen des Buckets nicht ändern, deshalb konnte Aktar die Regel nicht selbst hinzufügen. Öffne im Cloudflare-Dashboard R2 > {0} > Settings > CORS Policy, füge die Regel unten hinzu und wähle dann „Link erstellen“.",
+    "fr": "Cette clé ne peut pas modifier les réglages du bucket, Aktar n’a donc pas pu ajouter la règle lui-même. Dans le tableau de bord Cloudflare, ouvrez R2 > {0} > Settings > CORS Policy, ajoutez la règle ci-dessous, puis choisissez « Créer le lien ».",
+    "es": "Esta clave no puede cambiar los ajustes del bucket, así que Aktar no pudo añadir la regla. En el panel de Cloudflare, abre R2 > {0} > Settings > CORS Policy, añade la regla de abajo y elige «Crear enlace».",
+    "pt-BR": "Esta chave não pode alterar as configurações do bucket, então o Aktar não conseguiu adicionar a regra. No painel da Cloudflare, abra R2 > {0} > Settings > CORS Policy, adicione a regra abaixo e escolha “Criar link”.",
+    "ja": "このキーではバケットの設定を変更できないため、Aktar はルールを追加できませんでした。Cloudflare ダッシュボードで R2 > {0} > Settings > CORS Policy を開き、下のルールを追加してから「リンクを作成」を選んでください。",
+    "zh-Hans": "此密钥无法更改存储桶的设置，因此 Aktar 无法自行添加规则。请在 Cloudflare 控制台中打开 R2 > {0} > Settings > CORS Policy，添加下面的规则，然后选择“创建链接”。",
+    "zh-Hant": "此金鑰無法變更儲存貯體的設定，因此 Aktar 無法自行加入規則。請在 Cloudflare 主控台開啟 R2 > {0} > Settings > CORS Policy，加入下方的規則，然後選擇「建立連結」。",
+    "ko": "이 키로는 버킷 설정을 바꿀 수 없어 Aktar가 규칙을 직접 추가하지 못했습니다. Cloudflare 대시보드에서 R2 > {0} > Settings > CORS Policy을 열고 아래 규칙을 추가한 뒤 ‘링크 만들기’를 선택하세요.",
+    "it": "Questa chiave non può modificare le impostazioni del bucket, quindi Aktar non ha potuto aggiungere la regola da solo. Nella dashboard di Cloudflare apri R2 > {0} > Settings > CORS Policy, aggiungi la regola qui sotto, poi scegli «Crea link».",
+    "nl": "Deze sleutel kan de instellingen van de bucket niet wijzigen, dus Aktar kon de regel niet zelf toevoegen. Open in het Cloudflare-dashboard R2 > {0} > Settings > CORS Policy, voeg de regel hieronder toe en kies dan ‘Maak link’.",
+    "pl": "Ten klucz nie może zmieniać ustawień bucketu, więc Aktar nie mógł sam dodać reguły. W panelu Cloudflare otwórz R2 > {0} > Settings > CORS Policy, dodaj poniższą regułę, a potem wybierz „Utwórz link”.",
+    "ru": "Этот ключ не может менять настройки бакета, поэтому Aktar не смог добавить правило сам. В панели Cloudflare откройте R2 > {0} > Settings > CORS Policy, добавьте правило ниже и выберите «Создать ссылку».",
+    "uk": "Цей ключ не може змінювати налаштування бакета, тому Aktar не зміг додати правило сам. У панелі Cloudflare відкрийте R2 > {0} > Settings > CORS Policy, додайте правило нижче й виберіть «Створити посилання».",
+    "id": "Kunci ini tidak bisa mengubah pengaturan bucket, jadi Aktar tidak bisa menambahkan aturan itu sendiri. Di dasbor Cloudflare, buka R2 > {0} > Settings > CORS Policy, tambahkan aturan di bawah, lalu pilih Buat Tautan.",
+    "vi": "Khóa này không thể thay đổi cài đặt của bucket, nên Aktar không tự thêm quy tắc được. Trong bảng điều khiển Cloudflare, mở R2 > {0} > Settings > CORS Policy, thêm quy tắc bên dưới rồi chọn Tạo liên kết."
   }
 }
