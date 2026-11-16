@@ -550,7 +550,10 @@ mod tests {
         let watched = vec![(home.join("Pictures/Screenshots"), "Screenshots".to_string())];
         assert_eq!(forbidden(Path::new("/"), &protected, &[]), Some(Forbidden::Root));
         assert_eq!(forbidden(&home, &protected, &[]), Some(Forbidden::Home));
-        assert_eq!(forbidden(&base.join("windows/System32"), &protected, &[]), Some(Forbidden::System));
+        // Windows and macOS compare paths case-insensitively; Linux doesn't.
+        let expected = if cfg!(target_os = "linux") { None } else { Some(Forbidden::System) };
+        assert_eq!(forbidden(&base.join("windows/System32"), &protected, &[]), expected);
+        assert_eq!(forbidden(&base.join("Windows/System32"), &protected, &[]), Some(Forbidden::System));
         assert_eq!(forbidden(&base.join("Program Files"), &protected, &[]), Some(Forbidden::System));
         assert_eq!(forbidden(&home.join("AppData/Roaming/com.getaktar.windows"), &protected, &[]), Some(Forbidden::AppData));
         assert_eq!(forbidden(&home.join("AppData"), &protected, &[]), Some(Forbidden::AppData));

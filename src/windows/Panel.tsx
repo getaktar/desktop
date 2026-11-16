@@ -74,6 +74,7 @@ import { useDestinations, useHistory, useJobs, useLive, useSettings, useTauriEve
 import { sharex, type ShareXStatus } from "../lib/sharex";
 import { useI18n } from "../lib/i18n";
 import { LargeBatchBanners, PauseControl, watchingStatus } from "./settings/WatchedFolders";
+import { isLinux } from "../lib/platform";
 
 export default function Panel() {
   const { t } = useI18n();
@@ -324,7 +325,11 @@ export default function Panel() {
                   <Button
                     size="small"
                     icon={<ScreenshotRegular />}
-                    title={t("Snip an area, a window or the whole screen with Windows’ snipping tool and upload it")}
+                    title={
+                      isLinux
+                        ? t("Take a screenshot with your desktop’s screenshot tool and upload it")
+                        : t("Snip an area, a window or the whole screen with Windows’ snipping tool and upload it")
+                    }
                     onClick={() => api.captureScreen()}
                   >
                     {t("Capture")}

@@ -29,9 +29,16 @@ pub struct StorageCredentials {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialError {
-    #[error("{}", t!("No credentials found in Credential Manager for this destination."))]
+    #[cfg_attr(not(target_os = "linux"), error("{}", t!("No credentials found in Credential Manager for this destination.")))]
+    #[cfg_attr(target_os = "linux", error("{}", t!("No credentials found in the system keyring for this destination.")))]
     NotFound,
-    #[error("{}", t!("Credential Manager error ({0}).", .0))]
+    /// The Secret Service is locked and its unlock prompt was dismissed
+    /// (a desktop that logged in without a password leaves it locked).
+    #[cfg(target_os = "linux")]
+    #[error("{}", t!("The system keyring is locked. Unlock it with your login password when it asks, then try again."))]
+    Locked,
+    #[cfg_attr(not(target_os = "linux"), error("{}", t!("Credential Manager error ({0}).", .0)))]
+    #[cfg_attr(target_os = "linux", error("{}", t!("System keyring error ({0}).", .0)))]
     Store(String),
 }
 
@@ -39,6 +46,8 @@ impl From<keyring::Error> for CredentialError {
     fn from(error: keyring::Error) -> Self {
         match error {
             keyring::Error::NoEntry => CredentialError::NotFound,
+            #[cfg(target_os = "linux")]
+            keyring::Error::NoStorageAccess(_) => CredentialError::Locked,
             other => CredentialError::Store(other.to_string()),
         }
     }

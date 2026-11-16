@@ -21,6 +21,7 @@ import { api, errorMessage, type CloudflareItem, type ConnectionResult, type Des
 import { providerName } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import { ConnectionTestResult } from "./ConnectionTestResult";
+import { isLinux } from "../lib/platform";
 
 type Step = "token" | "options" | "working" | "saved";
 
@@ -351,7 +352,11 @@ export function CloudflareSetupDialog({
                   <Field
                     label={t("API Token")}
                     validationMessage={tokenError ?? undefined}
-                    hint={t("The token isn’t stored. Aktar keeps only the storage keys made from it, in Credential Manager.")}
+                    hint={
+                      isLinux
+                        ? t("The token isn’t stored. Aktar keeps only the storage keys made from it, in the system keyring.")
+                        : t("The token isn’t stored. Aktar keeps only the storage keys made from it, in Credential Manager.")
+                    }
                   >
                     <Input
                       type="password"

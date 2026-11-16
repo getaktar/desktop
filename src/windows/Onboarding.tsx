@@ -6,6 +6,7 @@ import { ImportDestinationDialog } from "../components/TransferDialogs";
 import { api, type DestinationConfig } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import appIcon from "../../src-tauri/icons/128x128.png";
+import { isLinux } from "../lib/platform";
 
 export default function Onboarding() {
   const { t } = useI18n();
@@ -41,7 +42,9 @@ export default function Onboarding() {
         </Button>
       </div>
       <Text size={200} className="secondary onboarding-tray-hint" align="center">
-        {t("Aktar lives in the notification area, next to the clock. If you don’t see its icon, click the arrow there and drag Aktar onto the taskbar.")}
+        {isLinux
+          ? t("Aktar lives in the system tray, in the top bar or the panel. On GNOME, tray icons need the AppIndicator extension (Ubuntu has it built in).")
+          : t("Aktar lives in the notification area, next to the clock. If you don’t see its icon, click the arrow there and drag Aktar onto the taskbar.")}
       </Text>
 
       <DestinationForm

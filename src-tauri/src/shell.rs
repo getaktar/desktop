@@ -14,6 +14,57 @@ use crate::uploads::{self, UploadInput};
 pub const UPLOAD_FLAG: &str = "--upload";
 pub const WATCH_FLAG: &str = "--watch";
 
+/// What the shortcuts do, from the command line: for desktops where an app
+/// can't have a global shortcut of its own (Wayland), the user binds a
+/// system shortcut to `aktar --capture` and the like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Panel,
+    UploadClipboard,
+    UploadAndPaste,
+    Rename,
+    Capture,
+    CaptureAndPaste,
+    Undo,
+}
+
+/// The same actions as the keyboard shortcuts in Settings.
+const ACTIONS: [(&str, Action); 7] = [
+    ("--panel", Action::Panel),
+    ("--upload-clipboard", Action::UploadClipboard),
+    ("--upload-and-paste", Action::UploadAndPaste),
+    ("--rename", Action::Rename),
+    ("--capture", Action::Capture),
+    ("--capture-and-paste", Action::CaptureAndPaste),
+    ("--undo", Action::Undo),
+];
+
+pub fn action(argv: &[String]) -> Option<Action> {
+    argv.iter().find_map(|arg| ACTIONS.iter().find(|(flag, _)| arg == flag).map(|(_, action)| *action))
+}
+
+pub fn run_action(core: &SharedCore, action: Action) {
+    match action {
+        Action::Panel => crate::panel::show(&core.app),
+        Action::UploadClipboard => uploads::upload_clipboard_in_background(core, false),
+        // The window in front is the one the user was typing in: the
+        // system shortcut that ran this doesn't take the focus.
+        Action::UploadAndPaste => uploads::upload_clipboard_and_paste(
+            core,
+            false,
+            crate::quick_share::PasteTarget::foreground(crate::quick_share::PASTE_WINDOW_MS),
+        ),
+        Action::Rename => uploads::upload_clipboard_in_background(core, true),
+        Action::Capture => crate::capture::start(core, false),
+        Action::CaptureAndPaste => crate::capture::start(core, true),
+        Action::Undo => {
+            if !crate::quick_share::undo_latest(core) {
+                crate::win32::beep();
+            }
+        }
+    }
+}
+
 /// True when these launch arguments ask for an upload.
 pub fn is_upload(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg == UPLOAD_FLAG)
@@ -98,7 +149,13 @@ pub fn register_context_menu() {
     set(&format!(r"{key}\command"), None, &format!("\"{exe}\" {WATCH_FLAG} \"%1\""));
 }
 
-#[cfg(not(windows))]
+/// The same entries in Linux file managers (see `linux::file_managers`).
+#[cfg(target_os = "linux")]
+pub fn register_context_menu() {
+    crate::linux::file_managers::register();
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn register_context_menu() {}
 
 fn paths_after_flag(argv: &[String], cwd: &Path) -> Vec<PathBuf> {

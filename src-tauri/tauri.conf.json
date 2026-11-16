@@ -47,6 +47,22 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "depends": ["xdg-desktop-portal", "libdbus-1-3"],
+        "recommends": ["xdotool", "wtype", "gnome-keyring | kwalletmanager"],
+        "desktopTemplate": "linux/aktar.desktop"
+      },
+      "rpm": {
+        "depends": ["xdg-desktop-portal", "dbus-libs"],
+        "recommends": ["xdotool", "wtype", "ydotool"],
+        "desktopTemplate": "linux/aktar.desktop"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
       "nsis": {

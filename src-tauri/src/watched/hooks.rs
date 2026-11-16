@@ -152,6 +152,13 @@ async fn script(path: &str, payload: &serde_json::Value) -> Result<(), String> {
             command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path]);
             command
         }
+        // A shell script saved without the executable bit still runs.
+        #[cfg(unix)]
+        "sh" => {
+            let mut command = tokio::process::Command::new("sh");
+            command.arg(path);
+            command
+        }
         _ => tokio::process::Command::new(path),
     };
     let upload = &payload["upload"];

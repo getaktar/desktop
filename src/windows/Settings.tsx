@@ -59,6 +59,7 @@ import { links } from "../lib/links";
 import { sharex, type ShareXStatus } from "../lib/sharex";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import { WatchedFoldersSettings } from "./settings/WatchedFolders";
+import { isLinux } from "../lib/platform";
 
 type TabName = "general" | "destinations" | "watched" | "output" | "integrations" | "about";
 
@@ -161,7 +162,7 @@ function GeneralSettings() {
     <SettingsPage title={t("General")} subtitle={t("Control how the app behaves.")}>
       <SettingsSection title={t("Language")}>
         <Card>
-          <CardRow title={t("App language")} subtitle={t("Follows your Windows display language unless you pick one here.")}>
+          <CardRow title={t("App language")} subtitle={isLinux ? t("Follows your system language unless you pick one here.") : t("Follows your Windows display language unless you pick one here.")}>
             <Select
               value={settings.language ?? ""}
               onChange={(_, data) => {
@@ -179,8 +180,8 @@ function GeneralSettings() {
         </Card>
       </SettingsSection>
 
-      {/* The Store updates its own packages. */}
-      {!info?.packaged && (
+      {/* The Store (and a Linux package manager) updates its own packages. */}
+      {info?.updatesItself && (
         <SettingsSection title={t("Updates")}>
           <Card>
             <ToggleRow
@@ -249,6 +250,15 @@ function GeneralSettings() {
             </CardRow>
           ))}
         </Card>
+        {info?.wayland && (
+          <Text size={200} className="secondary break">
+            {t(
+              "Wayland doesn’t let apps set global shortcuts, so these may only work while an app running under XWayland is in front. For a shortcut that always works, add one in your desktop’s keyboard settings that runs {0}.",
+              `${info.launchCommand ?? "aktar"} --capture`,
+            )}{" "}
+            {t("The other actions are --upload-and-paste, --upload-clipboard, --rename, --capture-and-paste, --undo and --panel.")}
+          </Text>
+        )}
       </SettingsSection>
 
       <SettingsSection title={t("Uploads")}>
@@ -315,7 +325,9 @@ function appShortcuts(settings: Settings, t: ReturnType<typeof useI18n>["t"]) {
     {
       action: "capture" as const,
       title: t("Capture and upload"),
-      subtitle: t("Opens Windows’ snipping bar: pick an area, a window or the whole screen. The screenshot is uploaded and its link copied."),
+      subtitle: isLinux
+        ? t("Opens your desktop’s screenshot tool: pick an area, a window or the whole screen. The screenshot is uploaded and its link copied.")
+        : t("Opens Windows’ snipping bar: pick an area, a window or the whole screen. The screenshot is uploaded and its link copied."),
       value: settings.captureShortcut,
     },
     {
@@ -832,7 +844,7 @@ function AboutSettings() {
           )}
         </div>
         <div className="spacer" />
-        {!info?.packaged && (
+        {info?.updatesItself && (
           <Button disabled={checking} onClick={() => api.checkForUpdates()}>
             {t("Check for Updates…")}
           </Button>

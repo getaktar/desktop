@@ -1422,7 +1422,11 @@ impl<H: Host> Engine<H> {
                 self.ledger.remove(folder_id, relative);
                 if let Err(error) = platform::move_to_trash(&path) {
                     self.ledger.put(&entry);
-                    problem = Some(t!("Couldn’t move {0} to the Recycle Bin. {1}", uploaded.filename, error));
+                    problem = Some(if cfg!(target_os = "linux") {
+                        t!("Couldn’t move {0} to the Trash. {1}", uploaded.filename, error)
+                    } else {
+                        t!("Couldn’t move {0} to the Recycle Bin. {1}", uploaded.filename, error)
+                    });
                 }
             }
             // Uploaded/ is never looked at, so the row has nothing more to

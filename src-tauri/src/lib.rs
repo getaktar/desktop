@@ -23,6 +23,8 @@ mod hotkey;
 mod i18n;
 mod image_metadata;
 mod image_processing;
+#[cfg(target_os = "linux")]
+mod linux;
 mod local_api;
 mod multipart;
 mod outbox;
@@ -90,6 +92,11 @@ pub fn run() {
             // A folder from File Explorer's "Watch with Aktar".
             if shell::is_watch(&argv) {
                 shell::handle_watch(&core::core(app), &argv, std::path::Path::new(&cwd));
+                return;
+            }
+            // `aktar --capture` and the like, from a system shortcut.
+            if let Some(action) = shell::action(&argv) {
+                shell::run_action(&core::core(app), action);
                 return;
             }
             // Links are delivered through the deep-link plugin's
@@ -304,6 +311,12 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     // registers itself so links can be tested.
     #[cfg(all(debug_assertions, windows))]
     let _ = app.deep_link().register_all();
+    // The .deb declares aktar:// in its desktop file. An AppImage has no
+    // installer, so it registers itself (and its current path) each launch.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPIMAGE").is_some() || cfg!(debug_assertions) {
+        let _ = app.deep_link().register_all();
+    }
 
     let launch_links = app.deep_link().get_current().ok().flatten().unwrap_or_default();
     for link in &launch_links {
@@ -325,12 +338,15 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     // and stay in the tray, like the shortcut does. "Watch with Aktar"
     // opens Settings instead.
     let args: Vec<String> = std::env::args().collect();
-    let explorer_upload = shell::is_upload(&args) || shell::is_watch(&args);
+    let action = shell::action(&args);
+    let explorer_upload = shell::is_upload(&args) || shell::is_watch(&args) || action.is_some();
     let cwd = std::env::current_dir().unwrap_or_default();
     if shell::is_upload(&args) {
         shell::handle(&core, &args, &cwd);
     } else if shell::is_watch(&args) {
         shell::handle_watch(&core, &args, &cwd);
+    } else if let Some(action) = action {
+        shell::run_action(&core, action);
     }
     // Restarted by an update installed while the user was away.
     let after_update = settings.quiet_next_launch;
@@ -353,5 +369,6 @@ pub fn quit(app: &AppHandle) {
     if updater::install_pending_on_quit(&core) {
         return;
     }
+    clipboard::release();
     app.exit(0);
 }

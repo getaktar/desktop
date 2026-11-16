@@ -593,8 +593,16 @@ export interface AppInfo {
   regionLocale: string | null;
   /** Installed from the Microsoft Store, which handles updates. */
   packaged: boolean;
+  /** Kept up to date by Aktar's own updater: not a Store package, and on
+   * Linux only an AppImage (a .deb is updated by its package manager). */
+  updatesItself: boolean;
   languageOverride: string | null;
   languages: [string, string][];
+  /** A Linux Wayland session, where apps can't have global shortcuts. */
+  wayland: boolean;
+  /** What starts this copy (Linux), for system shortcuts like
+   * `<launchCommand> --capture`. */
+  launchCommand: string | null;
 }
 
 export interface UploadSucceeded {

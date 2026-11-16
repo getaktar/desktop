@@ -1,0 +1,55 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} %u
+StartupWMClass=aktar
+Icon={{icon}}
+Name={{name}}
+Terminal=false
+Type=Application
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}
+Actions=capture;upload-clipboard;
+
+[Desktop Action capture]
+Name=Capture and Upload
+Name[de]=Aufnehmen und hochladen
+Name[es]=Capturar y subir
+Name[fr]=Capturer et envoyer
+Name[id]=Tangkap layar dan unggah
+Name[it]=Acquisisci e carica
+Name[ja]=取り込んでアップロード
+Name[ko]=캡처 후 업로드
+Name[nl]=Leg vast en upload
+Name[pl]=Przechwyć i prześlij
+Name[pt_BR]=Capturar e enviar
+Name[ru]=Сделать снимок и загрузить
+Name[tr]=Yakala ve yükle
+Name[uk]=Зробити знімок і вивантажити
+Name[vi]=Chụp màn hình và tải lên
+Name[zh_CN]=截屏并上传
+Name[zh_TW]=截圖並上傳
+Exec={{exec}} --capture
+
+[Desktop Action upload-clipboard]
+Name=Upload Clipboard
+Name[de]=Zwischenablage hochladen
+Name[es]=Subir el portapapeles
+Name[fr]=Envoyer le presse-papiers
+Name[id]=Unggah Papan Klip
+Name[it]=Carica Appunti
+Name[ja]=クリップボードをアップロード
+Name[ko]=클립보드 업로드
+Name[nl]=Upload klembord
+Name[pl]=Prześlij zawartość schowka
+Name[pt_BR]=Enviar área de transferência
+Name[ru]=Загрузить из буфера обмена
+Name[tr]=Panoyu Yükle
+Name[uk]=Вивантажити буфер обміну
+Name[vi]=Tải lên bộ nhớ tạm
+Name[zh_CN]=上传剪贴板内容
+Name[zh_TW]=上傳剪貼簿
+Exec={{exec}} --upload-clipboard

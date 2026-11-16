@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Linux: the same app as a .deb, an .rpm and an AppImage (x86_64), built
+  from this repository with `scripts/build_linux.sh` and by the Release
+  workflow, which also adds the AppImage to `latest.json`. It uses the system tray
+  (AppIndicator), keeps keys in the Secret Service (GNOME Keyring,
+  KWallet), captures with the desktop's own screenshot tool
+  (xdg-desktop-portal, Wayland included), adds Upload with Aktar and Watch
+  with Aktar to Files, Dolphin and Nemo, and has `--upload-clipboard`,
+  `--upload-and-paste`, `--rename`, `--capture`, `--capture-and-paste`,
+  `--undo` and `--panel` (the keyboard shortcuts' actions) for system
+  shortcuts where Wayland doesn't allow global ones. Upload and paste uses
+  xdotool on X11 and wtype or ydotool on Wayland. The panel is a regular
+  window on Linux. The AppImage updates itself; the .deb and .rpm are
+  updated by installing the new one
+
+  Tested on Ubuntu 26.04 with GNOME (Wayland) and KDE Plasma 6.6 (Wayland
+  and X11), and on Fedora 44 (GNOME, the .rpm and the AppImage). On
+  Wayland desktops with data control (Plasma, Sway, Hyprland) the
+  clipboard is the Wayland one; GNOME's goes through XWayland, which
+  Mutter keeps in step
+
+### Fixed
+
+- `tauri-plugin-deep-link` 2.6.3, whose Linux code builds with the current
+  `rust-ini`
+
 ## [0.14.0] - 2026-11-10
 
 ### Added

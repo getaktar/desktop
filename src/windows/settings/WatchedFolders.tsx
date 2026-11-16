@@ -44,6 +44,7 @@ import {
 import { formatDateTime, formatTime } from "../../lib/format";
 import { useDestinations, useWatched } from "../../lib/hooks";
 import { useI18n, type Translate } from "../../lib/i18n";
+import { isLinux } from "../../lib/platform";
 
 /** "Watched Folders" in Settings. `pendingPath` is a folder to add, from
  * File Explorer's "Watch with Aktar". */
@@ -419,7 +420,7 @@ function FolderRow(props: {
           <MenuList>
             <MenuItem onClick={props.onEdit}>{t("Edit")}</MenuItem>
             <MenuItem onClick={() => api.showFolder(folder.path).catch((error) => message(errorMessage(error), { kind: "error" }))}>
-              {t("Show in Explorer")}
+              {isLinux ? t("Show in Folder") : t("Show in Explorer")}
             </MenuItem>
             <MenuDivider />
             <MenuItem disabled={folder.waiting === 0 && folder.awaitingConfirmation === 0} onClick={() => api.uploadWatchedPending(folder.id)}>

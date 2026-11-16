@@ -9,9 +9,15 @@
 //! first image put there while the bar is up, or within a moment after it
 //! closes, is the snip. A bar closed without a snip (Esc) ends the wait
 //! without uploading anything, and so does a minute without one.
+//!
+//! On Linux the desktop's screenshot dialog (GNOME's, KDE's) is asked for
+//! through xdg-desktop-portal, which works on Wayland too, and hands back
+//! the file it saved.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "linux"))]
+use std::time::Instant;
 
 use crate::core::SharedCore;
 use crate::quick_share::{Origin, PasteTarget, PASTE_WINDOW_MS};
@@ -23,11 +29,14 @@ static AGAIN: AtomicBool = AtomicBool::new(false);
 
 /// How long after the snipping bar closed a snip may still turn up on the
 /// clipboard.
+#[cfg(not(target_os = "linux"))]
 const BAR_GRACE: Duration = Duration::from_secs(3);
 /// How long the panel takes to hand the foreground back once it's hidden.
 const PANEL_SETTLE: Duration = Duration::from_millis(250);
 /// The longest a capture is waited for.
+#[cfg(not(target_os = "linux"))]
 const MAX_WAIT: Duration = Duration::from_secs(60);
+#[cfg(not(target_os = "linux"))]
 const POLL: Duration = Duration::from_millis(150);
 
 /// Starts a capture; one that's waiting opens the snipping bar again. With
@@ -47,6 +56,45 @@ pub fn start(core: &SharedCore, paste: bool) {
     });
 }
 
+/// Linux: the desktop's own screenshot dialog (xdg-desktop-portal), which
+/// hands back a file instead of putting the snip on the clipboard.
+#[cfg(target_os = "linux")]
+async fn capture(core: &SharedCore, target: Option<isize>) {
+    use crate::linux::Screenshot;
+
+    let snapshot = tauri::async_runtime::spawn_blocking(win32::take_snapshot).await.unwrap_or(win32::Snapshot::Unavailable);
+    tokio::time::sleep(PANEL_SETTLE).await;
+    loop {
+        AGAIN.store(false, Ordering::SeqCst);
+        match crate::linux::take_screenshot().await {
+            Screenshot::Taken(path) => {
+                let input = tauri::async_runtime::spawn_blocking(move || crate::clipboard::read_screenshot_file(&path)).await.ok().flatten();
+                let Some(input) = input else {
+                    crate::uploads::show_notification(core, &crate::t!("Capture couldn’t start"), &crate::t!("The screenshot couldn’t be read."));
+                    return;
+                };
+                let paste = target.map(|window| PasteTarget { window, deadline: crate::util::now_millis() + PASTE_WINDOW_MS });
+                crate::uploads::enqueue_with(core, vec![input], None, Origin { paste, snapshot: Some(snapshot) });
+                return;
+            }
+            // Asked for again while the dialog was up: it was closed for
+            // that, so it opens once more.
+            Screenshot::Cancelled if AGAIN.load(Ordering::SeqCst) => continue,
+            Screenshot::Cancelled => return,
+            Screenshot::Failed(error) => {
+                log::warn!("Screenshot portal: {error}");
+                crate::uploads::show_notification(
+                    core,
+                    &crate::t!("Capture couldn’t start"),
+                    &crate::t!("The desktop’s screenshot tool didn’t open. Take the screenshot with Print Screen, copy it and upload the clipboard with Aktar."),
+                );
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 async fn capture(core: &SharedCore, target: Option<isize>) {
     // What's on the clipboard now is what Undo puts back: the snip itself
     // (with the password in it) never is.
@@ -93,6 +141,7 @@ async fn capture(core: &SharedCore, target: Option<isize>) {
 /// make it another shortcut), after the panel had a moment to hand the
 /// foreground back to the window behind it. Returns the window in front
 /// before the bar opened, or None when the keys couldn't be pressed.
+#[cfg(not(target_os = "linux"))]
 async fn open_snipping_bar(core: &SharedCore) -> Option<isize> {
     tokio::time::sleep(PANEL_SETTLE).await;
     for _ in 0..30 {

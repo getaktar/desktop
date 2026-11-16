@@ -261,6 +261,18 @@ mod imp {
         std::env::var_os("HOME").map(PathBuf::from)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn system_folders() -> Vec<PathBuf> {
+        [
+            "/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/opt", "/proc", "/root", "/run", "/sbin", "/snap", "/srv", "/sys",
+            "/usr", "/var",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn system_folders() -> Vec<PathBuf> {
         ["/System", "/Library", "/Applications", "/usr", "/bin", "/sbin", "/etc", "/var", "/private"]
             .into_iter()
@@ -272,14 +284,70 @@ mod imp {
         false
     }
 
+    /// A folder on NFS, SMB or a FUSE mount (GNOME's network places, sshfs,
+    /// rclone): watched by polling, since inotify doesn't hear changes made
+    /// on the server.
+    #[cfg(target_os = "linux")]
+    pub fn is_network_path(path: &Path) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        const NFS: i64 = 0x6969;
+        const SMB: i64 = 0x517B;
+        const CIFS: i64 = 0xFF53_4D42;
+        const SMB2: i64 = 0xFE53_4D42;
+        const FUSE: i64 = 0x6573_5546;
+        const CEPH: i64 = 0x00C3_6400;
+        let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
+        let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: `path` is NUL-terminated and `stats` is read only after
+        // statfs filled it in.
+        if unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        // __fsword_t is 32-bit on 32-bit targets.
+        #[allow(clippy::unnecessary_cast)]
+        let kind = unsafe { stats.assume_init() }.f_type as i64;
+        [NFS, SMB, CIFS, SMB2, FUSE, CEPH].contains(&kind)
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn is_network_path(_path: &Path) -> bool {
         false
     }
 
+    /// Where GNOME and KDE save screenshots: Screenshots in the Pictures
+    /// folder, whose name follows the language (`xdg-user-dir PICTURES`).
+    #[cfg(target_os = "linux")]
+    pub fn screenshots_folder() -> Option<PathBuf> {
+        let pictures = crate::linux::output("xdg-user-dir", &["PICTURES"])
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join("Pictures")))?;
+        Some(pictures.join("Screenshots"))
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn screenshots_folder() -> Option<PathBuf> {
         home_dir().map(|home| home.join("Pictures").join("Screenshots"))
     }
 
+    /// Running on battery: there's a battery, and no mains supply is
+    /// online (the kernel's power_supply class).
+    #[cfg(target_os = "linux")]
+    pub fn on_battery() -> bool {
+        let Ok(supplies) = std::fs::read_dir("/sys/class/power_supply") else { return false };
+        let (mut battery, mut mains_online) = (false, false);
+        for supply in supplies.flatten() {
+            let read = |name: &str| std::fs::read_to_string(supply.path().join(name)).map(|text| text.trim().to_string()).unwrap_or_default();
+            match read("type").as_str() {
+                "Battery" if read("scope") != "Device" => battery = true,
+                "Mains" | "USB" if read("online") == "1" => mains_online = true,
+                _ => {}
+            }
+        }
+        battery && !mains_online
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn on_battery() -> bool {
         false
     }

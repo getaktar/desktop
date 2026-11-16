@@ -93,8 +93,8 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "library", t!("Library"), true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "settings", t!("Settings"), true, None::<&str>)?)?;
-    // The Store updates its own packages.
-    if !crate::package::is_packaged() {
+    // The Store (and a Linux package manager) updates its own packages.
+    if crate::package::updates_itself() {
         menu.append(&MenuItem::with_id(app, "check-updates", t!("Check for Updates…"), true, None::<&str>)?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;

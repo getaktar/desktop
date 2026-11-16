@@ -3,8 +3,9 @@
 //! it is (to put it back), key presses, the foreground window, free disk
 //! space, the network, and notifications that can be replaced or taken
 //! back. Only std, `log` and the Windows crates are used here, so the
-//! Windows half can be type-checked on its own. Elsewhere (the tests on a
-//! Mac) the functions do nothing.
+//! Windows half can be type-checked on its own. Linux has its own half in
+//! `linux/win32.rs`. Elsewhere (the tests on a Mac) the functions do
+//! nothing.
 
 #![cfg_attr(not(windows), allow(dead_code, unused_variables))]
 
@@ -453,7 +454,11 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "linux/win32.rs"]
+mod imp;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     use super::*;
 

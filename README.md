@@ -129,6 +129,8 @@ Invoke-RestMethod -Method Put -Headers $headers -InFile C:\Reports\daily.csv `
 - Windows 10 (1809 or later) or Windows 11, x64
 - Microsoft Edge WebView2 (built into Windows 11; the installer adds it on
   Windows 10 if it's missing)
+- Or Linux x86_64 with a desktop that has a system tray (GNOME with the
+  AppIndicator extension, KDE Plasma, Cinnamon, XFCE), on X11 or Wayland
 
 ## Building
 
@@ -150,6 +152,43 @@ Build anything you'll share with `scripts/build.ps1` rather than a plain
 `pnpm tauri build`: Rust embeds source paths in the binary, and the script
 maps your home folder out of them, then checks that `aktar.exe` doesn't
 contain your user name.
+
+### Linux
+
+The same code builds for Linux (x86_64) as a .deb, an .rpm and an AppImage. The
+Linux-only parts (the screenshot portal, key presses for upload and paste,
+the light/dark setting, file manager menus) are in `src-tauri/src/linux`.
+
+```bash
+sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+pnpm install
+scripts/build_linux.sh   # .deb, .rpm and AppImage into src-tauri/target/release/bundle
+```
+
+At run time Aktar needs xdg-desktop-portal (for Capture) and a Secret
+Service (GNOME Keyring or KWallet) for its keys. Upload and paste needs
+xdotool on X11, and wtype or ydotool on Wayland. On GNOME the tray icon
+needs the AppIndicator extension, which Ubuntu ships (on Fedora:
+`sudo dnf install gnome-shell-extension-appindicator`, then log in again).
+Without it Aktar still runs: opening it from the app grid shows the panel.
+
+- GNOME's Wayland session has no virtual keyboard for wtype, so upload
+  and paste goes through ydotool there: its daemon (`systemctl --user
+  enable --now ydotool`) needs access to `/dev/uinput`, which means being
+  in the `input` group (`sudo usermod -aG input $USER`, then log in
+  again). ydotool presses keys by position, so on layouts where V isn't
+  where it is on QWERTY (Dvorak) the paste can come out as another key.
+- On KDE Plasma (Wayland) wtype is used, and the first paste makes Plasma
+  ask whether to allow controlling input devices ("Remote Control").
+- Upload and paste presses Ctrl+V, which terminals take as a literal
+  character (they paste with Ctrl+Shift+V).
+- With automatic login the login keyring stays locked, and the first
+  upload asks for the login password to unlock it.
+- Wayland doesn't let apps have global shortcuts. Settings shows the
+  commands to bind to system shortcuts instead: `aktar --upload-clipboard`,
+  `--upload-and-paste`, `--rename`, `--capture`, `--capture-and-paste`,
+  `--undo` and `--panel`.
 
 ### Microsoft Store package
 

@@ -557,11 +557,11 @@ pub async fn test_hook(core: &SharedCore, folder: WatchedFolder, hook: Hook) -> 
 pub async fn pick_script(core: &SharedCore, window: &tauri::WebviewWindow) -> Result<Option<Hook>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    window
-        .dialog()
-        .file()
-        .set_parent(window)
-        .add_filter(t!("Scripts"), &["ps1", "bat", "cmd", "exe"])
+    let dialog = window.dialog().file().set_parent(window);
+    // Linux scripts are any executable file, usually without an extension.
+    #[cfg(not(target_os = "linux"))]
+    let dialog = dialog.add_filter(t!("Scripts"), &["ps1", "bat", "cmd", "exe"]);
+    dialog
         .pick_file(move |path| {
             let _ = sender.send(path);
         });

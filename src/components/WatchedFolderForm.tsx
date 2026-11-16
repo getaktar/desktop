@@ -36,6 +36,7 @@ import { durationLabel, temporaryLinkLabel } from "../lib/format";
 import { useSettings } from "../lib/hooks";
 import { useI18n } from "../lib/i18n";
 import { HookEditor } from "./HookEditor";
+import { isLinux } from "../lib/platform";
 
 const MB = 1024 * 1024;
 
@@ -362,7 +363,7 @@ export function WatchedFolderForm({
                   <Field label={t("Original file")}>
                     <Select value={current.afterUpload} onChange={(_, data) => update({ afterUpload: data.value as AfterUpload })}>
                       <option value="keep">{t("Keep it")}</option>
-                      <option value="trash">{t("Move to Recycle Bin")}</option>
+                      <option value="trash">{isLinux ? t("Move to Trash") : t("Move to Recycle Bin")}</option>
                       <option value="moveToUploaded">{t("Move to “Uploaded” subfolder")}</option>
                     </Select>
                   </Field>

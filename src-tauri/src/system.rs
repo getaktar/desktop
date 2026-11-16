@@ -1,8 +1,8 @@
 //! The few things Aktar asks Windows directly rather than through Tauri:
 //! theme settings, the regional format, the double-click time, whether Alt
-//! is held, and an error box for when the app can't start. Other platforms
-//! (the UI is sometimes run elsewhere during development) get plain
-//! defaults.
+//! is held, and an error box for when the app can't start. Linux answers
+//! from its desktop (`linux/system.rs`). Other platforms (the UI is
+//! sometimes run elsewhere during development) get plain defaults.
 
 #[cfg(windows)]
 mod imp {
@@ -110,7 +110,11 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "linux/system.rs"]
+mod imp;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     pub fn taskbar_uses_light_theme() -> bool {
         false

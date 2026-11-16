@@ -20,6 +20,16 @@ pub fn is_packaged() -> bool {
     *PACKAGED.get_or_init(detect)
 }
 
+/// Whether Aktar's own updater keeps this copy up to date: not a
+/// Microsoft Store package (the Store does), and on Linux only an AppImage
+/// (a .deb is updated by the package manager it came from).
+pub fn updates_itself() -> bool {
+    if cfg!(target_os = "linux") {
+        return std::env::var_os("APPIMAGE").is_some();
+    }
+    !is_packaged()
+}
+
 #[cfg(windows)]
 fn detect() -> bool {
     use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;

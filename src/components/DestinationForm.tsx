@@ -75,6 +75,7 @@ import { ConfirmDialog } from "./Dialogs";
 import { HookEditor } from "./HookEditor";
 import { ShortcutRecorder } from "./ShortcutRecorder";
 import { ShortLinksFormSection } from "./ShortLinksFormSection";
+import { isLinux } from "../lib/platform";
 
 const presets: ProviderPreset[] = ["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3"];
 
@@ -857,9 +858,13 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                   <Input value={useForExtensions} placeholder="dmg, zip" spellCheck={false} onChange={(_, data) => setUseForExtensions(data.value)} />
                 </Field>
                 <Text size={200} className="secondary">
-                  {t(
-                    "When an upload doesn’t name a destination (the clipboard shortcut, the panel, File Explorer, the local API), files of these types come here instead of the default destination. An extension listed here wins over a type.",
-                  )}
+                  {isLinux
+                    ? t(
+                        "When an upload doesn’t name a destination (the clipboard shortcut, the panel, the file manager, the local API), files of these types come here instead of the default destination. An extension listed here wins over a type.",
+                      )
+                    : t(
+                        "When an upload doesn’t name a destination (the clipboard shortcut, the panel, File Explorer, the local API), files of these types come here instead of the default destination. An extension listed here wins over a type.",
+                      )}
                 </Text>
               </div>
 

@@ -49,7 +49,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 aws-sigv4 = "1"
 md-5 = "0.11"
 
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+# Linux keeps secrets in the Secret Service (GNOME Keyring, KWallet), which
+# survives a restart. "linux-native" would be the kernel keyring, which
+# forgets everything at shutdown.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 arboard = "3"
 # "avif" encodes with rav1e in pure Rust: no NASM ("nasm" stays off), and
 # "rayon" lets it use every core.
@@ -92,6 +95,25 @@ trash = "5"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Capture through the desktop's own screenshot dialog (xdg-desktop-portal,
+# the only way on Wayland) and the light/dark setting. zbus is already
+# built for the notification plugin.
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "settings"] }
+# Notifications with an Undo or Retry button, replaced and taken back by
+# tag. Already built for the notification plugin.
+notify-rust = "4"
+# The Wayland clipboard itself (wlr/ext data control: KDE Plasma, Sway,
+# Hyprland). Without it arboard uses XWayland's clipboard, which KWin
+# doesn't fill with what Wayland apps copy. GNOME has no data control
+# protocol, so it still goes through XWayland there, which Mutter keeps
+# in step.
+arboard = { version = "3", features = ["wayland-data-control"] }
+# statvfs, for the free disk space check.
+libc = "0.2"
+# The portal's change signals are streams. Already built for zbus.
+futures-util = { version = "0.3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # The clipboard as it is (for Undo), key presses (upload and paste,

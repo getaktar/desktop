@@ -22,6 +22,14 @@ const WIDTH: f64 = 340.0;
 const MARGIN: f64 = 12.0;
 const DEFAULT_HEIGHT: f64 = 420.0;
 
+/// A popup by the tray icon that closes when the user clicks elsewhere, on
+/// Windows. Linux tray icons don't report clicks or where they are (the
+/// icon always opens its menu), and Wayland doesn't let an app place its
+/// windows, so there the panel is a small window of its own, with a title
+/// bar, placed by the desktop and left open until it's closed: a file can
+/// be dragged onto it from the file manager without it disappearing.
+const FLOATING: bool = !cfg!(target_os = "linux");
+
 #[derive(Default)]
 pub struct PanelState {
     /// Where the tray icon was when it was last clicked, in physical pixels.
@@ -41,15 +49,15 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .title("Aktar")
         .inner_size(WIDTH, DEFAULT_HEIGHT)
         .background_color(crate::windows::background_color())
-        .decorations(false)
+        .decorations(!FLOATING)
         .resizable(false)
         .maximizable(false)
-        .minimizable(false)
-        .skip_taskbar(true)
-        .always_on_top(true)
+        .minimizable(!FLOATING)
+        .skip_taskbar(FLOATING)
+        .always_on_top(FLOATING)
         // Windows 11 rounds the corners of an undecorated window that has
         // a shadow, so the panel looks like the system flyouts.
-        .shadow(true)
+        .shadow(FLOATING)
         .visible(false)
         .build()?;
     #[cfg(windows)]
@@ -60,11 +68,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let handle = app.clone();
     window.on_window_event(move |event| {
         match event {
-            WindowEvent::Focused(false) => watch_outside_clicks(&handle, true),
+            WindowEvent::Focused(false) if FLOATING => watch_outside_clicks(&handle, true),
             WindowEvent::ThemeChanged(_) => crate::tray::refresh_icon(&handle),
             // Moved onto a monitor with a different scale: Windows resizes
             // the window, so it needs placing again from its new size.
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::ScaleFactorChanged { .. } if FLOATING => {
                 if let Some(panel) = handle.get_webview_window(LABEL) {
                     if panel.is_visible().unwrap_or(false) {
                         place(&handle, &panel);
@@ -102,7 +110,9 @@ pub fn toggle(app: &AppHandle) {
 
 pub fn show(app: &AppHandle) {
     let Some(window) = window(app) else { return };
-    place(app, &window);
+    if FLOATING {
+        place(app, &window);
+    }
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -113,6 +123,9 @@ pub fn show(app: &AppHandle) {
     // in the foreground (a second launch from the Start menu, a link). A
     // panel that never had focus never loses it either, so watch for the
     // next click outside it right away.
+    if !FLOATING {
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -140,7 +153,7 @@ pub fn set_height(app: &AppHandle, height: f64) {
     let height = height.clamp(120.0, 720.0);
     *app.state::<PanelState>().height.lock().unwrap() = Some(height);
     let _ = window.set_size(LogicalSize::new(WIDTH, height));
-    if window.is_visible().unwrap_or(false) {
+    if FLOATING && window.is_visible().unwrap_or(false) {
         place(app, &window);
     }
 }

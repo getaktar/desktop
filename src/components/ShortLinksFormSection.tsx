@@ -42,6 +42,7 @@ import {
   type ShortLinkFormState,
 } from "../lib/shortLinks";
 import { AlertDialog } from "./Dialogs";
+import { isLinux } from "../lib/platform";
 
 type TestState = { kind: "testing" } | { kind: "passed"; result: ShortLinkTestResult } | { kind: "failed"; message: string };
 
@@ -426,7 +427,9 @@ function ShareXConsentDialog({ imported, onConfirm, onCancel }: { imported: Shar
               </div>
               {imported.token && (
                 <Text size={200} className="secondary">
-                  {t("The token is kept in Credential Manager with this destination’s keys, not in its settings.")}
+                  {isLinux
+                    ? t("The token is kept in the system keyring with this destination’s keys, not in its settings.")
+                    : t("The token is kept in Credential Manager with this destination’s keys, not in its settings.")}
                 </Text>
               )}
               {imported.usesHTTP && (

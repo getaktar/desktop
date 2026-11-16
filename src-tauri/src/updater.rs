@@ -52,8 +52,8 @@ fn set_status(core: &SharedCore, status: UpdateStatus) {
 
 /// "Check for Updates…": shows the update window and checks right away.
 pub fn check_now(app: &AppHandle) {
-    // The Store updates its own packages.
-    if crate::package::is_packaged() {
+    // The Store (and a Linux package manager) updates its own packages.
+    if !crate::package::updates_itself() {
         return;
     }
     let core = crate::core::core(app);
@@ -153,9 +153,18 @@ async fn install_when_idle(core: &SharedCore) {
         let Some(bytes) = core.updater.downloaded.lock().unwrap().take() else { return };
         let Some(update) = core.updater.pending.lock().unwrap().clone() else { return };
         core.settings.update(|settings| settings.quiet_next_launch = true);
-        if let Err(error) = run_installer(core, &update, bytes) {
-            core.settings.update(|settings| settings.quiet_next_launch = false);
-            set_status(core, UpdateStatus::Failed { message: error.to_string() });
+        match run_installer(core, &update, bytes) {
+            // Windows' installer has ended Aktar by now; an AppImage was
+            // replaced in place, and the new version starts on a restart.
+            Ok(()) => {
+                if !cfg!(windows) {
+                    restart(core);
+                }
+            }
+            Err(error) => {
+                core.settings.update(|settings| settings.quiet_next_launch = false);
+                set_status(core, UpdateStatus::Failed { message: error.to_string() });
+            }
         }
         return;
     }
@@ -180,11 +189,14 @@ fn is_idle(core: &SharedCore) -> bool {
 
 /// On Windows the installer ends this process as it starts, without the
 /// usual cleanup, so the tray icon is taken down first; otherwise a dead
-/// icon stays behind until the pointer passes over it.
+/// icon stays behind until the pointer passes over it. On Linux the
+/// AppImage file is replaced and this process goes on, so the icon stays.
 fn run_installer(core: &SharedCore, update: &Update, bytes: Vec<u8>) -> Result<(), tauri_plugin_updater::Error> {
-    crate::tray::remove(&core.app);
+    if cfg!(windows) {
+        crate::tray::remove(&core.app);
+    }
     let result = update.install(bytes);
-    if result.is_err() {
+    if cfg!(windows) && result.is_err() {
         let _ = crate::tray::create(&core.app);
     }
     result
@@ -206,22 +218,38 @@ pub async fn install(core: &SharedCore) {
         set_status(core, UpdateStatus::Failed { message: error.to_string() });
         return;
     }
+    restart(core);
+}
+
+/// Starts the new version. An AppImage is started with an environment
+/// that doesn't point into the old version's mount (see
+/// `linux::relaunch_appimage`).
+fn restart(core: &SharedCore) {
+    #[cfg(target_os = "linux")]
+    if crate::linux::relaunch_appimage() {
+        crate::clipboard::release();
+        core.app.exit(0);
+        return;
+    }
     core.app.restart();
 }
 
 /// An update downloaded in the background is installed when Aktar quits.
-/// Returns true when the installer took over.
+/// Returns true when the installer took over (Windows, where it ends this
+/// process). On Linux the AppImage is replaced and Aktar still has to
+/// exit, so it returns false.
 pub fn install_pending_on_quit(core: &SharedCore) -> bool {
     let Some(bytes) = core.updater.downloaded.lock().unwrap().take() else { return false };
     let Some(update) = core.updater.pending.lock().unwrap().clone() else { return false };
     // The user asked to quit, so the installer shouldn't start Aktar again.
-    run_installer(core, &update.restart_after_install(false), bytes).is_ok()
+    let installed = run_installer(core, &update.restart_after_install(false), bytes).is_ok();
+    installed && cfg!(windows)
 }
 
 /// Checks at launch and then about once a day while "Automatically check
 /// for updates" is on.
 pub fn schedule(core: &SharedCore) {
-    if crate::package::is_packaged() {
+    if !crate::package::updates_itself() {
         return;
     }
     let core = core.clone();

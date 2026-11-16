@@ -38,8 +38,15 @@ pub struct AppInfo {
     region_locale: Option<String>,
     /// Installed from the Microsoft Store, which handles updates.
     packaged: bool,
+    /// Kept up to date by Aktar's own updater (see `package::updates_itself`).
+    updates_itself: bool,
     language_override: Option<String>,
     languages: Vec<(String, String)>,
+    /// A Wayland session, where an app can't have global shortcuts: the
+    /// user binds system shortcuts to `launch_command --capture` instead.
+    wayland: bool,
+    /// The command that starts this copy, for those system shortcuts.
+    launch_command: Option<String>,
 }
 
 #[tauri::command]
@@ -49,8 +56,17 @@ pub fn app_info(core: Core) -> AppInfo {
         language: i18n::current(),
         region_locale: crate::system::region_locale(),
         packaged: crate::package::is_packaged(),
+        updates_itself: crate::package::updates_itself(),
         language_override: core.settings.get().language,
         languages: i18n::SUPPORTED.iter().map(|(code, name)| (code.to_string(), name.to_string())).collect(),
+        #[cfg(target_os = "linux")]
+        wayland: crate::linux::is_wayland(),
+        #[cfg(not(target_os = "linux"))]
+        wayland: false,
+        #[cfg(target_os = "linux")]
+        launch_command: crate::linux::launch_command().map(|path| path.to_string_lossy().into_owned()),
+        #[cfg(not(target_os = "linux"))]
+        launch_command: None,
     }
 }
 
