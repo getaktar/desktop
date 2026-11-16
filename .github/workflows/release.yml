@@ -152,6 +152,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           releaseId: ${{ needs.release.outputs.release-id }}
+          # Without it the Linux entries in latest.json point at
+          # /releases/latest/download/ instead of this version's files.
+          tagName: ${{ github.ref_name }}
           includeUpdaterJson: true
           args: --bundles deb,rpm,appimage
 
