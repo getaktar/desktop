@@ -1,4 +1,4 @@
-# Aktar for Windows
+# Aktar for Windows and Linux
 
 <p align="center">
   <img src="docs/logo.png" alt="Aktar logo" width="120">
@@ -6,10 +6,60 @@
 
 <p align="center"><strong>Your files. Your storage. One shortcut away.</strong></p>
 
-A Windows notification area app for uploading files to your own
+A notification area (system tray) app for uploading files to your own
 S3-compatible storage. Drag a file onto the panel, paste from the clipboard,
 or press a shortcut from anywhere, and get a public link back on your
-clipboard. This is the Windows version of [Aktar for Mac](https://github.com/getaktar/mac).
+clipboard. This is the Windows and Linux version of [Aktar for Mac](https://github.com/getaktar/mac):
+one codebase, built for both.
+
+## Install
+
+**Windows 10 (1809 or later) or 11, x64**
+
+- [Microsoft Store](https://apps.microsoft.com/detail/9PHJL211PWM7?mode=direct) (updates through the Store), or
+- [Aktar-Setup.exe](https://github.com/getaktar/desktop/releases/latest/download/Aktar-Setup.exe):
+  installs per user without admin rights and updates itself. It isn't code
+  signed yet, so SmartScreen may warn: "More info", then "Run anyway".
+  [Install guide](https://getaktar.com/windows/install/)
+
+The Store copy and the .exe are separate installs; pick one.
+
+**Linux x86_64, on X11 or Wayland**
+
+| Package | For | Updates |
+|---|---|---|
+| [Aktar-x86_64.AppImage](https://github.com/getaktar/desktop/releases/latest/download/Aktar-x86_64.AppImage) | any distribution | itself |
+| [Aktar-amd64.deb](https://github.com/getaktar/desktop/releases/latest/download/Aktar-amd64.deb) | Debian, Ubuntu, Mint | when you install the new .deb |
+| [Aktar-x86_64.rpm](https://github.com/getaktar/desktop/releases/latest/download/Aktar-x86_64.rpm) | Fedora, openSUSE | when you install the new .rpm |
+
+```bash
+# AppImage (needs FUSE, which most desktops have)
+chmod +x Aktar-x86_64.AppImage && ./Aktar-x86_64.AppImage
+
+# Debian / Ubuntu
+sudo apt install ./Aktar-amd64.deb
+
+# Fedora / openSUSE
+sudo dnf install ./Aktar-x86_64.rpm
+```
+
+Good to know before you start:
+
+- The upload panel opens from the tray icon. KDE Plasma, Cinnamon and XFCE
+  have a tray; Ubuntu's GNOME ships the AppIndicator extension, other
+  GNOME setups need it (Fedora: `sudo dnf install
+  gnome-shell-extension-appindicator`, then log in again). Without it,
+  open Aktar from the app grid.
+- Keys are kept in your system keyring (GNOME Keyring or KWallet).
+- Wayland doesn't let apps own global shortcuts: add one in your desktop's
+  keyboard settings for the command Aktar's Settings shows (for example
+  `aktar --upload-clipboard`). On X11 the default `Ctrl+Shift+Alt+U` works.
+- Upload and paste needs xdotool (X11), or wtype or ydotool (Wayland). On
+  GNOME Wayland that means ydotool and the `input` group, see
+  [Linux](#linux) below.
+- Aktar for Linux is new (since 0.15.0) and tested on GNOME and KDE
+  Plasma (Ubuntu, Fedora). Problems and distro reports are welcome in
+  [issues](https://github.com/getaktar/desktop/issues).
 
 ## Features
 
