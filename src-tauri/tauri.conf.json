@@ -39,7 +39,7 @@
     "copyright": "© 2026 Mert Topuz",
     "category": "Utility",
     "shortDescription": "Your files. Your storage. One shortcut away.",
-    "longDescription": "Upload files to your own S3-compatible storage from the Windows notification area and get a public link on your clipboard.",
+    "longDescription": "Upload files to your own S3-compatible storage from the notification area (Windows) or the system tray (Linux) and get a public link on your clipboard.",
     "homepage": "https://getaktar.com",
     "icon": [
       "icons/32x32.png",
