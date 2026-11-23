@@ -8,12 +8,13 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
   xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
   xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 desktop desktop4 desktop5 com rescap">
+  IgnorableNamespaces="uap uap3 uap5 desktop desktop4 desktop5 com rescap">
 
   <Identity
     Name="{{IDENTITY_NAME}}"
@@ -72,6 +73,18 @@
             <uap:DisplayName>Aktar</uap:DisplayName>
           </uap3:Protocol>
         </uap3:Extension>
+
+        <!-- A stable path to aktar.exe for screenshot tools that send their
+             image to Aktar (ShareX's action, Greenshot's external command:
+             aktar-desktop.exe with the upload flag and the file), since the package's own
+             folder changes with every update. Windows puts the alias in
+             %LOCALAPPDATA%\Microsoft\WindowsApps. Not "aktar.exe", which
+             would shadow the CLI's `aktar` command on PATH. -->
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="aktar.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="aktar-desktop.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
 
         <!-- "Launch at sign-in": a packaged app can't use the registry's Run
              key (its writes land in a private copy Windows never reads), so
