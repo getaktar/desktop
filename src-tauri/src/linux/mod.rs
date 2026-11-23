@@ -150,15 +150,37 @@ pub fn launch_command() -> Option<PathBuf> {
 /// doesn't hand itself over to it as a second instance.
 pub fn relaunch_appimage() -> bool {
     let Some(appimage) = std::env::var_os("APPIMAGE") else { return false };
+    let mut command = host_command("sh");
+    command.args(["-c", "sleep 1; exec \"$0\""]).arg(&appimage);
+    let directory = std::env::var_os("OWD").or_else(|| std::env::var_os("HOME")).unwrap_or_else(|| "/".into());
+    command.current_dir(directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    match command.spawn() {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("Could not start the updated AppImage: {error}");
+            false
+        }
+    }
+}
+
+/// A command for a program of the system's (a screenshot tool), with this
+/// process's environment minus what an AppImage's launcher added: it points
+/// variables like LD_LIBRARY_PATH, XDG_DATA_DIRS and GIO_MODULE_DIR into the
+/// AppImage's own mount, and a program started with them would load its
+/// bundled libraries instead of its own. It doesn't inherit the descriptor
+/// of the mount either, which would keep an old version's mount alive
+/// after an update.
+pub fn host_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
     let appdir = std::env::var("APPDIR").ok().filter(|dir| !dir.is_empty());
-    let mut command = Command::new("sh");
-    command.args(["-c", "sleep 1; exec \"$0\""]).arg(&appimage).env_clear();
+    let Some(appdir) = appdir else { return command };
+    command.env_clear();
     for (name, value) in std::env::vars_os() {
         if ["APPDIR", "APPIMAGE", "ARGV0", "OWD"].iter().any(|own| name == *own) {
             continue;
         }
-        match (&appdir, value.to_str()) {
-            (Some(appdir), Some(value)) if value.contains(appdir.as_str()) => {
+        match value.to_str() {
+            Some(value) if value.contains(appdir.as_str()) => {
                 let kept: Vec<&str> = value.split(':').filter(|part| !part.is_empty() && !part.starts_with(appdir.as_str())).collect();
                 if !kept.is_empty() {
                     command.env(&name, kept.join(":"));
@@ -169,8 +191,6 @@ pub fn relaunch_appimage() -> bool {
             }
         }
     }
-    let directory = std::env::var_os("OWD").or_else(|| std::env::var_os("HOME")).unwrap_or_else(|| "/".into());
-    command.current_dir(directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     // The AppImage runtime leaves a descriptor of its mount open in this
     // process (not close-on-exec); inherited, it would keep the old
     // version's mount, and its runtime, alive for good.
@@ -186,13 +206,7 @@ pub fn relaunch_appimage() -> bool {
             Ok(())
         });
     }
-    match command.spawn() {
-        Ok(_) => true,
-        Err(error) => {
-            log::warn!("Could not start the updated AppImage: {error}");
-            false
-        }
-    }
+    command
 }
 
 /// `$XDG_DATA_HOME`, or `~/.local/share`.

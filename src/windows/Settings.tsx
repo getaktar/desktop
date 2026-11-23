@@ -50,6 +50,7 @@ import { ProviderIcon } from "../components/FileVisuals";
 import { Card, CardRow, SettingsPage, SettingsSection, ToggleRow } from "../components/SettingsLayout";
 import { ShareXImportDialog } from "../components/ShareXImportDialog";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
+import { CaptureToolsSection, useCaptureTools } from "./settings/CaptureTools";
 import { ImportDestinationDialog, ShareDestinationDialog, type ShareRequest } from "../components/TransferDialogs";
 import { api, errorMessage, events, type AppShortcut, type DestinationConfig, type OutputMode, type Settings } from "../lib/api";
 import { formatBytes, providerName } from "../lib/format";
@@ -150,6 +151,7 @@ function GeneralSettings() {
   const [launchAtLogin, setLaunchAtLogin] = useState<boolean | null>(null);
   const [shortcutErrors, setShortcutErrors] = useState<Partial<Record<AppShortcut, string | null>>>({});
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const captureTools = useCaptureTools();
 
   useEffect(() => {
     api.getLaunchAtLogin().then(setLaunchAtLogin).catch(() => setLaunchAtLogin(false));
@@ -231,9 +233,11 @@ function GeneralSettings() {
         )}
       </SettingsSection>
 
+      <CaptureToolsSection settings={settings} tools={captureTools} />
+
       <SettingsSection title={t("Keyboard shortcuts")}>
         <Card>
-          {appShortcuts(settings, t).map(({ action, title, subtitle, value }) => (
+          {appShortcuts(settings, t, captureTools?.find((tool) => tool.id === settings.captureTool && tool.installed && tool.canStart && tool.id !== "system")?.name).map(({ action, title, subtitle, value }) => (
             <CardRow key={action} title={title} subtitle={subtitle}>
               <ShortcutRecorder
                 value={value}
@@ -300,7 +304,7 @@ function GeneralSettings() {
 
 /** The app's shortcuts, in the order Settings shows them. All but the
  * first are unset until the user records one. */
-function appShortcuts(settings: Settings, t: ReturnType<typeof useI18n>["t"]) {
+function appShortcuts(settings: Settings, t: ReturnType<typeof useI18n>["t"], captureTool?: string) {
   return [
     {
       action: "upload" as const,
@@ -325,7 +329,9 @@ function appShortcuts(settings: Settings, t: ReturnType<typeof useI18n>["t"]) {
     {
       action: "capture" as const,
       title: t("Capture and upload"),
-      subtitle: isLinux
+      subtitle: captureTool
+        ? t("Opens {0}: pick an area and edit it there. What it hands back is uploaded and its link copied.", captureTool)
+        : isLinux
         ? t("Opens your desktop’s screenshot tool: pick an area, a window or the whole screen. The screenshot is uploaded and its link copied.")
         : t("Opens Windows’ snipping bar: pick an area, a window or the whole screen. The screenshot is uploaded and its link copied."),
       value: settings.captureShortcut,

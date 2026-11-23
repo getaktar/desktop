@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Capture with the screenshot tool you like (Settings > General > Capture),
+  so what goes up is the annotated image: on Windows ShareX (Capture starts
+  its region capture; its action sends the edited image back with
+  `--upload`), Flameshot (Accept uploads), and Greenshot, Snagit or PicPick
+  through their own shortcuts and an external command; on Linux Flameshot,
+  Satty and Swappy (they edit the desktop's screenshot), and Spectacle
+  (Aktar waits up to 10 minutes for its Copy or Save; Stop Waiting in the
+  tray menu). The system's own tool stays the default. Undo puts back the
+  clipboard from before the capture, as before
+- Microsoft Store install: an `aktar-desktop.exe` app execution alias, a
+  path that survives updates, for tools that send files to Aktar
+
 ## [0.15.1] - 2026-11-16
 
 ### Fixed

@@ -11,6 +11,7 @@ import { mockConvertFileSrc, mockIPC, mockWindows } from "@tauri-apps/api/mocks"
 
 import type {
   BucketListing,
+  CaptureToolStatus,
   DestinationConfig,
   Job,
   LocalApiState,
@@ -152,6 +153,7 @@ let settings: Settings = {
   captureShortcut: null,
   capturePasteShortcut: null,
   undoShortcut: null,
+  captureTool: "system",
   reuseDuplicateLinks: true,
   copyLinkRightAway: true,
   localApiEnabled: true,
@@ -384,6 +386,8 @@ export function installMockBackend(route: string) {
           return null;
         case "thumbnail_usage":
           return 4_812_800;
+        case "capture_tools":
+          return mockCaptureTools();
         case "clear_thumbnails":
           return null;
         case "thumbnail_cleanup_prefix":
@@ -432,9 +436,12 @@ export function installMockBackend(route: string) {
           return {};
         case "get_settings":
           return settings;
-        case "update_settings":
-          settings = { ...settings, ...(args.patch as Partial<Settings>) };
+        case "update_settings": {
+          const { captureFolder, ...patch } = args.patch as Partial<Settings>;
+          settings = { ...settings, ...patch };
+          if (captureFolder !== undefined) settings = { ...settings, captureFolder: captureFolder || undefined };
           return settings;
+        }
         case "get_launch_at_login":
           return true;
         case "local_api_state":
@@ -725,4 +732,24 @@ export function installMockBackend(route: string) {
     },
     { shouldMockEvents: true },
   );
+}
+
+/** The capture tools a Windows PC might have: ShareX and Flameshot
+ * installed, the rest not. */
+function mockCaptureTools(): CaptureToolStatus[] {
+  const program = "C:\\Program Files\\Aktar\\aktar.exe";
+  const send = (placeholder: string) => ({
+    uploadProgram: program,
+    uploadArguments: `--upload "${placeholder}"`,
+    uploadCommand: `"${program}" --upload "${placeholder}"`,
+  });
+  const none = { uploadProgram: null, uploadArguments: null, uploadCommand: null };
+  return [
+    { id: "system", name: "", kind: "system", canStart: true, installed: true, website: "", defaultFolder: null, ...none },
+    { id: "sharex", name: "ShareX", kind: "send", canStart: true, installed: true, website: "https://getsharex.com/", defaultFolder: null, ...send("$input") },
+    { id: "flameshot", name: "Flameshot", kind: "run", canStart: true, installed: true, website: "https://flameshot.org/", defaultFolder: null, ...none },
+    { id: "greenshot", name: "Greenshot", kind: "send", canStart: false, installed: false, website: "https://getgreenshot.org/", defaultFolder: null, ...send("{0}") },
+    { id: "snagit", name: "Snagit", kind: "send", canStart: false, installed: false, website: "https://www.techsmith.com/snagit/", defaultFolder: null, ...send("%1") },
+    { id: "picpick", name: "PicPick", kind: "send", canStart: false, installed: false, website: "https://picpick.app/", defaultFolder: null, ...send("%1") },
+  ];
 }

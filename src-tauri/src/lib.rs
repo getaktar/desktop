@@ -3,6 +3,7 @@
 
 mod bucket;
 mod capture;
+mod capture_tools;
 mod clipboard;
 mod clipboard_text;
 mod cloudflare;
@@ -211,6 +212,7 @@ pub fn run() {
             commands::fetch_remote,
             commands::get_settings,
             commands::update_settings,
+            commands::capture_tools,
             commands::set_shortcut,
             commands::set_shortcut_paused,
             commands::set_language,

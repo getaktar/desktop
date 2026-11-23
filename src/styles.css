@@ -1553,3 +1553,25 @@ body {
 .requests-empty {
   max-width: 420px;
 }
+
+/* Settings > General > Capture: a tool's setup steps and the command to
+   paste into it. */
+.row-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.setup-steps {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.command-field {
+  width: 260px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+

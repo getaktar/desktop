@@ -482,6 +482,11 @@ export interface Settings {
   capturePasteShortcut: string | null;
   /** "Undo the last upload". */
   undoShortcut: string | null;
+  /** "Capture with": the screenshot tool Capture runs. */
+  captureTool: CaptureToolId;
+  /** The folder a tool Aktar waits for saves to, when it isn't the
+   * tool's own default; left out then. */
+  captureFolder?: string;
   /** Each destination's own "Upload clipboard to this destination"
    * shortcut, by destination ID; left out when there are none. */
   destinationShortcuts?: Record<string, string>;
@@ -515,8 +520,35 @@ export type SettingsPatch = Partial<
     | "autoCheckUpdates"
     | "autoInstallUpdates"
     | "deleteAfterDays"
+    | "captureTool"
   >
->;
+> & {
+  /** An empty string goes back to the tool's own folder. */
+  captureFolder?: string;
+};
+
+export type CaptureToolId = "system" | "flameshot" | "sharex" | "greenshot" | "snagit" | "picpick" | "satty" | "swappy" | "spectacle";
+
+/** How an image comes back from a tool (src-tauri/src/capture_tools.rs):
+ * Aktar runs it and reads its file, runs it as an editor after the system
+ * capture, waits for its Copy or Save, or the tool sends it to Aktar. */
+export type CaptureToolKind = "system" | "run" | "editAfter" | "wait" | "send";
+
+export interface CaptureToolStatus {
+  id: CaptureToolId;
+  name: string;
+  kind: CaptureToolKind;
+  /** Aktar's Capture can start it; otherwise it's used with its own
+   * shortcut, and Capture uses the system tool. */
+  canStart: boolean;
+  installed: boolean;
+  website: string;
+  defaultFolder: string | null;
+  /** For a tool that sends files to Aktar. */
+  uploadProgram: string | null;
+  uploadArguments: string | null;
+  uploadCommand: string | null;
+}
 
 /** The only "Delete after" choices, in days (src-tauri/src/expiry.rs). */
 export const expiryDurations = [1, 7, 14, 30] as const;
@@ -861,6 +893,7 @@ export const api = {
   bucketThumbnail: (destinationId: string, object: BucketObject) =>
     invoke<string | null>("bucket_thumbnail", { destinationId, object }),
   thumbnailUsage: () => invoke<number>("thumbnail_usage"),
+  captureTools: () => invoke<CaptureToolStatus[]>("capture_tools"),
   clearThumbnails: () => invoke<void>("clear_thumbnails"),
   /** A fresh presigned link to an upload in history. */
   recordTemporaryLink: (id: string, seconds: number) => invoke<string>("record_temporary_link", { id, seconds }),

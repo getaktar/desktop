@@ -37,6 +37,14 @@ pub struct Settings {
     pub capture_shortcut: Option<String>,
     /// "Capture, upload and paste the link".
     pub capture_paste_shortcut: Option<String>,
+    /// "Capture with": the screenshot tool Capture runs (the Mac app's
+    /// docs/capture-tools.md). The system's own by default.
+    #[serde(deserialize_with = "crate::capture_tools::deserialize_lenient")]
+    pub capture_tool: crate::capture_tools::CaptureTool,
+    /// The folder a tool Aktar waits for saves to (Spectacle), when it's
+    /// not the tool's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_folder: Option<String>,
     /// "Undo the last upload", for 10 seconds after it.
     pub undo_shortcut: Option<String>,
     /// Each destination's own "Upload clipboard to this destination"
@@ -86,6 +94,8 @@ impl Default for Settings {
             paste_shortcut: None,
             capture_shortcut: None,
             capture_paste_shortcut: None,
+            capture_tool: crate::capture_tools::CaptureTool::System,
+            capture_folder: None,
             undo_shortcut: None,
             destination_shortcuts: BTreeMap::new(),
             reuse_duplicate_links: true,
@@ -117,6 +127,9 @@ pub struct SettingsPatch {
     pub auto_check_updates: Option<bool>,
     pub auto_install_updates: Option<bool>,
     pub delete_after_days: Option<u32>,
+    pub capture_tool: Option<crate::capture_tools::CaptureTool>,
+    /// An empty string goes back to the tool's own folder.
+    pub capture_folder: Option<String>,
 }
 
 pub struct SettingsStore {
@@ -178,6 +191,12 @@ impl SettingsStore {
             }
             if let Some(value) = patch.auto_install_updates {
                 settings.auto_install_updates = value;
+            }
+            if let Some(value) = patch.capture_tool.filter(|tool| tool.is_on_this_platform()) {
+                settings.capture_tool = value;
+            }
+            if let Some(value) = patch.capture_folder {
+                settings.capture_folder = Some(value).filter(|folder| !folder.trim().is_empty());
             }
             if let Some(value) = patch.delete_after_days.filter(|days| *days == 0 || crate::expiry::is_valid(*days)) {
                 settings.delete_after_days = value;

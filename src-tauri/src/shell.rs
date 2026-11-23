@@ -98,6 +98,10 @@ pub fn handle(core: &SharedCore, argv: &[String], cwd: &Path) {
     if paths.is_empty() {
         return;
     }
+    // ShareX's action sending the image a capture Aktar started asked for.
+    if crate::capture::deliver(&paths) {
+        return;
+    }
     uploads::enqueue(core, paths.into_iter().map(UploadInput::from_path).collect(), None);
 }
 

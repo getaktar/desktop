@@ -70,6 +70,10 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &MenuItem::with_id(app, "capture", t!("Capture and Upload"), true, None::<&str>)?,
         ],
     )?;
+    // While Capture waits for a tool's edited image (Spectacle, ShareX).
+    if let Some(tool) = crate::capture::waiting_for() {
+        menu.append(&MenuItem::with_id(app, "capture-stop-waiting", t!("Stop Waiting for {0}", tool.name()), true, None::<&str>)?)?;
+    }
     // Once there's a folder to watch: pausing it, or resuming. (A pause on
     // battery power or a metered network ends on its own.)
     let core = crate::core::core(app);
@@ -107,6 +111,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "open-panel" => panel::show(app),
         "upload-clipboard" => crate::uploads::upload_clipboard_in_background(&crate::core::core(app), false),
         "capture" => crate::capture::start(&crate::core::core(app), false),
+        "capture-stop-waiting" => crate::capture::stop_waiting(),
         "library" => crate::windows::open(app, AppWindow::Library),
         "settings" => crate::windows::open(app, AppWindow::Settings),
         "check-updates" => crate::updater::check_now(app),

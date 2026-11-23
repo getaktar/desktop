@@ -169,13 +169,37 @@ pub fn read_capture() -> Option<UploadInput> {
 /// the desktop's own file stays where it put it.
 #[cfg(target_os = "linux")]
 pub fn read_screenshot_file(path: &std::path::Path) -> Option<UploadInput> {
+    copy_to_temporary(path)
+}
+
+/// A copy of an image in the temp folder, named like `read_capture` names
+/// one, deleted with its upload.
+pub fn copy_to_temporary(path: &std::path::Path) -> Option<UploadInput> {
     let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or("png").to_ascii_lowercase();
+    let (copy, filename) = new_capture_file(&extension)?;
+    std::fs::copy(path, &copy).ok()?;
+    Some(temporary_input(copy, filename))
+}
+
+/// A new, unused path in the temp folder for a screenshot a tool writes,
+/// and the name its upload goes by ("Screenshot 2026-11-23 at 14.03.12.png").
+pub fn new_capture_file(extension: &str) -> Option<(PathBuf, String)> {
     let filename = format!("Screenshot {}.{extension}", chrono::Local::now().format("%Y-%m-%d at %H.%M.%S"));
     let directory = temporary_directory();
     std::fs::create_dir_all(&directory).ok()?;
-    let copy = directory.join(format!("{}.{extension}", crate::util::new_id()));
-    std::fs::copy(path, &copy).ok()?;
-    Some(UploadInput { original_filename: filename, temporary: true, ..UploadInput::from_path(copy) })
+    Some((directory.join(format!("{}.{extension}", crate::util::new_id())), filename))
+}
+
+/// A screenshot in the temp folder, as an upload that deletes it when done.
+pub fn temporary_input(path: PathBuf, filename: String) -> UploadInput {
+    UploadInput { original_filename: filename, temporary: true, ..UploadInput::from_path(path) }
+}
+
+/// Deletes a temp file a capture made but didn't upload.
+pub fn remove_capture_file(path: &std::path::Path) {
+    if path.starts_with(temporary_directory()) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn write_temporary_image(image: ImageData, filename: String) -> Option<UploadInput> {

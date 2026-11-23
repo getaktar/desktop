@@ -70,6 +70,13 @@ pub fn app_info(core: Core) -> AppInfo {
     }
 }
 
+/// The screenshot tools Capture can use here, and which are installed.
+/// Looking for them touches the disk (and, for ShareX, the registry).
+#[tauri::command]
+pub async fn capture_tools() -> Vec<crate::capture_tools::ToolStatus> {
+    tauri::async_runtime::spawn_blocking(crate::capture_tools::statuses).await.unwrap_or_default()
+}
+
 // MARK: - Destinations
 
 #[tauri::command]
