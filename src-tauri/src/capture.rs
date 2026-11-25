@@ -154,6 +154,13 @@ fn command(program: &Path, arguments: &[std::ffi::OsString]) -> tokio::process::
     tokio::process::Command::from(command)
 }
 
+/// Starts a tool Aktar doesn't wait on. Its stderr goes nowhere rather
+/// than to a pipe nobody reads: once the pipe's reader is gone, the
+/// tool's first warning would end it (SIGPIPE), as Spectacle's does.
+fn spawn_detached(program: &Path, arguments: &[std::ffi::OsString]) -> std::io::Result<()> {
+    command(program, arguments).stderr(std::process::Stdio::null()).spawn().map(drop)
+}
+
 /// Runs a tool until it exits and returns whether it ran; what it printed
 /// on stderr comes with a failure.
 async fn run_to_end(program: &Path, arguments: &[std::ffi::OsString]) -> Result<(), String> {
@@ -226,7 +233,7 @@ async fn wait_for_tool(core: &SharedCore, target: Option<isize>, tool: CaptureTo
     let folder = (tool.kind() == Kind::Wait).then(|| save_folder(core, tool)).flatten();
     let watches_clipboard = tool.kind() == Kind::Wait;
     let arguments = tool.arguments(None, Path::new(""));
-    if let Err(error) = command(program, &arguments).spawn() {
+    if let Err(error) = spawn_detached(program, &arguments) {
         tool_failed(core, tool, &error.to_string());
         return;
     }
@@ -241,7 +248,7 @@ async fn wait_for_tool(core: &SharedCore, target: Option<isize>, tool: CaptureTo
             break None;
         }
         if AGAIN.swap(false, Ordering::SeqCst) {
-            if let Err(error) = command(program, &arguments).spawn() {
+            if let Err(error) = spawn_detached(program, &arguments) {
                 tool_failed(core, tool, &error.to_string());
                 break None;
             }
@@ -249,7 +256,7 @@ async fn wait_for_tool(core: &SharedCore, target: Option<isize>, tool: CaptureTo
             continue;
         }
         if let Some(path) = DELIVERED.lock().unwrap().take() {
-            break Some(UploadInput::from_path(path));
+            break Some(named_like_a_capture(path));
         }
         if watches_clipboard {
             let current = win32::clipboard_sequence();
@@ -263,7 +270,7 @@ async fn wait_for_tool(core: &SharedCore, target: Option<isize>, tool: CaptureTo
         if let Some(watch) = watch.as_mut().filter(|_| last_folder_look.elapsed() >= FOLDER_POLL) {
             last_folder_look = Instant::now();
             if let Some(path) = watch.poll() {
-                break Some(UploadInput::from_path(path));
+                break Some(named_like_a_capture(path));
             }
         }
     };
@@ -271,6 +278,15 @@ async fn wait_for_tool(core: &SharedCore, target: Option<isize>, tool: CaptureTo
     if let Some(input) = result {
         enqueue_capture(core, input, target, snapshot);
     }
+}
+
+/// A file the tool saved or sent, uploaded under a capture’s name
+/// ("Screenshot 2026-11-23 at 14.03.12.png") whatever the tool called it.
+/// The tool’s own file stays where it is.
+fn named_like_a_capture(path: PathBuf) -> UploadInput {
+    let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or("png").to_ascii_lowercase();
+    let filename = format!("Screenshot {}.{extension}", chrono::Local::now().format("%Y-%m-%d at %H.%M.%S"));
+    UploadInput { original_filename: filename, ..UploadInput::from_path(path) }
 }
 
 fn set_waiting(core: &SharedCore, tool: Option<CaptureTool>) {

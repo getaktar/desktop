@@ -249,22 +249,57 @@ impl CaptureTool {
         arguments
     }
 
-    /// Where Spectacle saves on its own when nothing else is set:
-    /// `~/Pictures/Screenshots` (Plasma 6), or the Pictures folder.
+    /// Where Spectacle saves when nothing else is set in Aktar: the folder
+    /// in its own settings (spectaclerc), else its default, the Pictures
+    /// folder's "Screenshots" in the desktop's language ("Ekran
+    /// Görüntüleri" in Turkish), which it creates on its first save.
     pub fn default_save_folder(self) -> Option<PathBuf> {
         if self != Self::Spectacle {
             return None;
         }
         let pictures = pictures_folder()?;
-        let screenshots = pictures.join("Screenshots");
-        Some(if screenshots.is_dir() { screenshots } else { pictures })
+        let settings = config_folder().and_then(|config| std::fs::read_to_string(config.join("spectaclerc")).ok()).unwrap_or_default();
+        Some(spectacle_save_folder(&settings, &pictures))
     }
+}
+
+/// Spectacle's save folder from its settings file: `imageSaveLocation`
+/// (a file URL) when the user picked one, else Pictures plus
+/// `translatedScreenshotsFolder` (Plasma 6), else Pictures/Screenshots.
+pub fn spectacle_save_folder(settings: &str, pictures: &Path) -> PathBuf {
+    let mut section = "";
+    let mut picked = None;
+    let mut translated = None;
+    for line in settings.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+            section = name;
+            continue;
+        }
+        if section != "ImageSave" && section != "General" {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let value = value.trim();
+        match key.trim() {
+            "imageSaveLocation" if !value.is_empty() => {
+                picked = Some(PathBuf::from(value.strip_prefix("file://").unwrap_or(value)));
+            }
+            "translatedScreenshotsFolder" if !value.is_empty() => translated = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    picked.unwrap_or_else(|| pictures.join(translated.as_deref().unwrap_or("Screenshots")))
+}
+
+/// `$XDG_CONFIG_HOME`, or `~/.config`.
+fn config_folder() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 }
 
 /// `$XDG_PICTURES_DIR` from user-dirs.dirs, or `~/Pictures`.
 fn pictures_folder() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    let config = config_folder()?;
     if let Ok(text) = std::fs::read_to_string(config.join("user-dirs.dirs")) {
         if let Some(folder) = parse_user_dir(&text, "XDG_PICTURES_DIR", &home) {
             return Some(folder);
@@ -548,6 +583,17 @@ mod tests {
         assert_eq!(parse_user_dir(text, "XDG_PICTURES_DIR", home), Some(PathBuf::from("/home/me/Resimler")));
         assert_eq!(parse_user_dir("XDG_PICTURES_DIR=\"/data/pics\"", "XDG_PICTURES_DIR", home), Some(PathBuf::from("/data/pics")));
         assert_eq!(parse_user_dir("XDG_MUSIC_DIR=\"$HOME/Music\"", "XDG_PICTURES_DIR", home), None);
+    }
+
+    #[test]
+    fn finds_spectacles_save_folder() {
+        let pictures = Path::new("/home/me/Resimler");
+        assert_eq!(spectacle_save_folder("", pictures), pictures.join("Screenshots"));
+        let translated = "[ImageSave]\ntranslatedScreenshotsFolder=Ekran Görüntüleri\n\n[VideoSave]\ntranslatedScreencastsFolder=Ekran Yayınları\n";
+        assert_eq!(spectacle_save_folder(translated, pictures), pictures.join("Ekran Görüntüleri"));
+        let picked = "[ImageSave]\nimageSaveLocation=file:///data/shots\ntranslatedScreenshotsFolder=Ekran Görüntüleri\n";
+        assert_eq!(spectacle_save_folder(picked, pictures), PathBuf::from("/data/shots"));
+        assert_eq!(spectacle_save_folder("[VideoSave]\nimageSaveLocation=file:///nope\n", pictures), pictures.join("Screenshots"));
     }
 
     #[test]
