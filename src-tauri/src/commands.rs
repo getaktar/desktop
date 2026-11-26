@@ -18,7 +18,7 @@ use crate::expiry::{self, FormRules, RulesCheck};
 use crate::history::UploadRecord;
 use crate::local_api::{self, LocalApiState};
 use crate::settings::{Settings, SettingsPatch};
-use crate::storage::{BucketListing, BucketObject, ConnectionResult, S3Provider};
+use crate::storage::{Backend, BucketListing, BucketObject, ConnectionResult, StorageError};
 use crate::transfer::{self, TransferError};
 use crate::updater::{self, UpdateStatus};
 use crate::uploads::{self, JobSnapshot, NameRequest, UploadInput};
@@ -80,8 +80,8 @@ pub async fn capture_tools() -> Vec<crate::capture_tools::ToolStatus> {
 // MARK: - Destinations
 
 #[tauri::command]
-pub fn list_destinations(core: Core) -> Vec<DestinationConfig> {
-    core.destinations.all()
+pub fn list_destinations(core: Core) -> Vec<crate::destinations::DestinationView> {
+    core.destinations.all().into_iter().map(Into::into).collect()
 }
 
 fn filled(credentials: Option<StorageCredentials>) -> Option<StorageCredentials> {
@@ -169,7 +169,11 @@ pub fn save_destination(
         let core = core.inner().clone();
         tauri::async_runtime::spawn(async move {
             let name = old.name.clone();
-            match thumbnails::bucket::delete_all(&S3Provider::new(old, keys), &prefix).await {
+            let deleted = match crate::storage::backend(&old, &keys) {
+                Ok(storage) => thumbnails::bucket::delete_all(&storage, &prefix).await,
+                Err(error) => Err(error),
+            };
+            match deleted {
                 Ok(()) => uploads::show_notification(&core, &t!("Deleted the thumbnails of {0} from the bucket", name), ""),
                 Err(error) => uploads::show_notification(
                     &core,
@@ -608,7 +612,8 @@ pub async fn test_connection(
         None if !config.id.is_empty() => credentials::load(&config.id).map_err(|error| error.to_string())?,
         None => return Err(t!("Enter an Access Key ID and Secret Access Key.")),
     };
-    S3Provider::new(config, credentials).test_connection().await.map_err(|error| error.to_string())
+    let storage = crate::storage::backend(&config, &credentials).map_err(|error| error.to_string())?;
+    storage.test_connection().await.map_err(|error| error.to_string())
 }
 
 /// Whether the destination's lifecycle rules for expiring uploads were set
@@ -653,7 +658,10 @@ pub async fn expiry_prefixes_in_use(
     credentials: Option<StorageCredentials>,
 ) -> Result<Vec<String>, String> {
     let credentials = credentials_for(&config, credentials)?;
-    S3Provider::new(config, credentials).expiry_prefixes_in_use().await.map_err(|error| error.to_string())
+    let storage = crate::storage::backend(&config, &credentials).map_err(|error| error.to_string())?;
+    // Lifecycle rules are S3's; no other kind has folders they'd empty.
+    let Some(s3) = storage.s3_if(config.capabilities().expiry_rules) else { return Ok(Vec::new()) };
+    s3.expiry_prefixes_in_use().await.map_err(|error| error.to_string())
 }
 
 /// "Turn Off and Remove Rules" in the destination form: takes Aktar's
@@ -1075,13 +1083,14 @@ pub async fn delete_short_link(core: Core<'_>, link_id: String) -> Result<(), St
 
 // MARK: - Bucket browser
 
-fn storage_for(core: &SharedCore, destination_id: &str) -> Result<(DestinationConfig, S3Provider), String> {
+fn storage_for(core: &SharedCore, destination_id: &str) -> Result<(DestinationConfig, Backend), String> {
     let destination = core
         .destinations
         .find(Some(destination_id))
         .ok_or_else(|| t!("No destination to upload to. Add one in Settings."))?;
     let credentials = credentials::load(&destination.id).map_err(|error| error.to_string())?;
-    Ok((destination.clone(), S3Provider::new(destination, credentials)))
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| error.to_string())?;
+    Ok((destination, storage))
 }
 
 #[tauri::command]
@@ -1181,8 +1190,9 @@ pub async fn bucket_create_folder(core: Core<'_>, destination_id: String, prefix
 
 #[tauri::command]
 pub async fn bucket_presign(core: Core<'_>, destination_id: String, key: String, seconds: u64) -> Result<String, String> {
-    let (_, storage) = storage_for(&core, &destination_id)?;
-    storage.temporary_url(&key, seconds.clamp(60, 604_800)).await.map_err(|error| error.to_string())
+    let (destination, storage) = storage_for(&core, &destination_id)?;
+    let s3 = storage.s3_if(destination.capabilities().temporary_links).ok_or_else(|| StorageError::Unsupported.to_string())?;
+    s3.temporary_url(&key, seconds.clamp(60, 604_800)).await.map_err(|error| error.to_string())
 }
 
 /// Uploads into `prefix` under each file's own name, adding " 2", " 3"...

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{events, SharedCore};
 use crate::destinations::{DestinationConfig, ProviderPreset};
-use crate::storage::{S3Provider, StorageError};
+use crate::storage::{Backend, S3Provider, StorageError};
 use crate::t;
 use crate::uploads::{JobState, RequestSource, UploadInput};
 
@@ -372,10 +372,13 @@ pub async fn create(core: &SharedCore, new: NewRequest) -> Result<FileRequest, C
         return Err(t!("The request could not be made.").into());
     }
     let credentials = crate::credentials::load(&destination.id).map_err(|error| error.to_string())?;
-    let provider = S3Provider::new(destination.clone(), credentials);
+    let storage = crate::storage::backend(&destination, &credentials)?;
+    // Presigned PUTs and CORS rules are S3's; another kind can't take
+    // files from a browser.
+    let provider = storage.s3_if(destination.capabilities().file_requests).ok_or(StorageError::Unsupported)?;
     let id = new_id();
-    let conditional = destination.preset.supports_conditional_writes();
-    ensure_cors(core, &provider, &destination, &slot_keys(&id, 1).0, conditional).await?;
+    let conditional = destination.capabilities().conditional_writes;
+    ensure_cors(core, provider, &destination, &slot_keys(&id, 1).0, conditional).await?;
 
     let now = crate::util::now_millis();
     let expires = now + new.seconds as i64 * 1000;
@@ -394,7 +397,7 @@ pub async fn create(core: &SharedCore, new: NewRequest) -> Result<FileRequest, C
     page.request = Some(crate::share_page::Request { title: title.clone(), note: note.clone(), max_bytes: new.max_bytes, conditional, slots });
     let page_key = format!("{}index.html", prefix(&id));
     provider.put_page(&page_key, crate::share_page::build_page(&page)).await?;
-    let link = match destination.temporary_link {
+    let link = match destination.temporary_link_seconds() {
         Some(_) => provider.temporary_url(&page_key, new.seconds).await?,
         None => crate::output::resolve_public_url(&destination.public_base_url, &page_key),
     };
@@ -477,7 +480,7 @@ pub async fn check_all(core: &SharedCore) {
             continue;
         };
         let Ok(credentials) = crate::credentials::load(&destination.id) else { continue };
-        let provider = S3Provider::new(destination.clone(), credentials);
+        let Ok(provider) = crate::storage::backend(&destination, &credentials) else { continue };
         match collect(core, &provider, &destination, &request, now).await {
             Ok(0) => {}
             Ok(found) => {
@@ -496,7 +499,7 @@ pub async fn check_all(core: &SharedCore) {
 }
 
 /// Starts collecting each slot that has a file; returns how many.
-async fn collect(core: &SharedCore, provider: &S3Provider, destination: &DestinationConfig, request: &FileRequest, now: i64) -> Result<usize, StorageError> {
+async fn collect(core: &SharedCore, provider: &Backend, destination: &DestinationConfig, request: &FileRequest, now: i64) -> Result<usize, StorageError> {
     let mut objects = Vec::new();
     let mut token = None;
     loop {
@@ -577,7 +580,9 @@ async fn collect(core: &SharedCore, provider: &S3Provider, destination: &Destina
                 match state {
                     JobState::Succeeded { .. } => {
                         if let Ok(credentials) = crate::credentials::load(&destination.id) {
-                            let _ = S3Provider::new(destination.clone(), credentials).delete_many(&[file_key, meta_key]).await;
+                            if let Ok(storage) = crate::storage::backend(&destination, &credentials) {
+                                let _ = storage.delete_many(&[file_key, meta_key]).await;
+                            }
                         }
                         core.requests.update(&request_id, |request| request.received += 1);
                         core.notify(events::REQUESTS_CHANGED);
@@ -601,7 +606,7 @@ async fn collect(core: &SharedCore, provider: &S3Provider, destination: &Destina
 pub async fn close(core: &SharedCore, id: &str) -> Result<(), String> {
     let request = core.requests.get(id).ok_or_else(|| t!("The request could not be made."))?;
     let destination = core.destinations.find(Some(&request.destination_id)).filter(|destination| destination.id == request.destination_id);
-    match destination.and_then(|destination| crate::credentials::load(&destination.id).ok().map(|credentials| S3Provider::new(destination, credentials))) {
+    match destination.and_then(|destination| crate::credentials::load(&destination.id).ok().and_then(|credentials| crate::storage::backend(&destination, &credentials).ok())) {
         Some(provider) => close_with(core, &provider, id).await.map_err(|error| error.to_string())?,
         None => core.requests.update(id, |request| request.closed_at = Some(crate::share_page::iso8601(crate::util::now_millis()))),
     }
@@ -609,7 +614,7 @@ pub async fn close(core: &SharedCore, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn close_with(core: &SharedCore, provider: &S3Provider, id: &str) -> Result<(), StorageError> {
+async fn close_with(core: &SharedCore, provider: &Backend, id: &str) -> Result<(), StorageError> {
     let mut keys = Vec::new();
     let mut token = None;
     loop {
@@ -644,8 +649,7 @@ pub fn close_for_destination(core: &SharedCore, destination: &DestinationConfig)
     for id in &open {
         core.requests.update(id, |request| request.closed_at = Some(now.clone()));
     }
-    if let Ok(credentials) = crate::credentials::load(&destination.id) {
-        let provider = S3Provider::new(destination.clone(), credentials);
+    if let Some(provider) = crate::credentials::load(&destination.id).ok().and_then(|credentials| crate::storage::backend(destination, &credentials).ok()) {
         tauri::async_runtime::spawn(async move {
             for id in open {
                 let mut token = None;

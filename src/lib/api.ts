@@ -34,10 +34,37 @@ export type ProviderPreset =
   | "digitalOceanSpaces"
   | "customS3";
 
+/** The kind of storage a destination is, told by its preset. Every preset
+ * is S3 for now. */
+export type StorageKind = "s3" | "webdav" | "sftp";
+
+/** What a destination's storage can do (`Capabilities` in destinations.rs):
+ * a control its kind can't use is hidden rather than shown and failing. */
+export interface StorageCapabilities {
+  upload: boolean;
+  delete: boolean;
+  exists: boolean;
+  publicURL: boolean;
+  list: boolean;
+  copy: boolean;
+  conditionalWrites: boolean;
+  multipart: boolean;
+  temporaryLinks: boolean;
+  expiryRules: boolean;
+  fileRequests: boolean;
+  bucketThumbnails: boolean;
+  sharePages: boolean;
+  cloudflareSetup: boolean;
+}
+
 export interface DestinationConfig {
   id: string;
   name: string;
   preset: ProviderPreset;
+  /** Filled in by `list_destinations` only (not saved, ignored when sent
+   * back), like `capabilities`. */
+  kind?: StorageKind;
+  capabilities?: StorageCapabilities;
   accountID?: string | null;
   endpoint: string;
   region: string;

@@ -22,7 +22,7 @@ use tokio::sync::Semaphore;
 use super::ThumbnailMode;
 use crate::core::SharedCore;
 use crate::destinations::DestinationConfig;
-use crate::storage::{BucketObject, S3Provider};
+use crate::storage::{Backend, BucketObject};
 
 /// Larger files aren't downloaded just to make a thumbnail.
 pub const MAX_SOURCE_BYTES: u64 = 25 * 1024 * 1024;
@@ -164,7 +164,7 @@ pub async fn for_record(core: &SharedCore, record_id: &str) -> bool {
 /// `uploaded_at`: for a history entry, the file must still be that upload,
 /// or the thumbnail would show another file.
 async fn make(
-    storage: &S3Provider,
+    storage: &Backend,
     destination: &DestinationConfig,
     object_key: &str,
     size: u64,
@@ -242,9 +242,9 @@ fn is_thumbnail(data: &[u8]) -> bool {
             .is_some_and(|(width, height)| width.max(height) <= super::MAX_PIXEL_SIZE * 2)
 }
 
-fn provider(destination: &DestinationConfig) -> Option<S3Provider> {
+fn provider(destination: &DestinationConfig) -> Option<Backend> {
     let credentials = crate::credentials::load(&destination.id).ok()?;
-    Some(S3Provider::new(destination.clone(), credentials))
+    crate::storage::backend(destination, &credentials).ok()
 }
 
 // MARK: - Cache

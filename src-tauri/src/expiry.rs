@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::{events, SharedCore};
 use crate::credentials::StorageCredentials;
 use crate::destinations::DestinationConfig;
-use crate::storage::S3Provider;
+use crate::storage::StorageError;
 
 /// The only durations offered, in days. There are no arbitrary values:
 /// each one needs its own lifecycle rule.
@@ -336,10 +336,9 @@ pub async fn set_up(
     record_result: bool,
 ) -> Result<RulesCheck, String> {
     let id = destination.id.clone();
-    let status = S3Provider::new(destination, credentials)
-        .ensure_expiry_rules()
-        .await
-        .map_err(|error| error.to_string())?;
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| error.to_string())?;
+    let s3 = storage.s3_if(destination.capabilities().expiry_rules).ok_or_else(|| StorageError::Unsupported.to_string())?;
+    let status = s3.ensure_expiry_rules().await.map_err(|error| error.to_string())?;
     let check = RulesCheck { status, checked_at: crate::util::now_millis() };
     if record_result {
         record(core, &id, Some(check.clone()));
@@ -359,10 +358,9 @@ pub async fn remove(
     record_result: bool,
 ) -> Result<(), String> {
     let id = destination.id.clone();
-    S3Provider::new(destination, credentials)
-        .remove_expiry_rules()
-        .await
-        .map_err(|error| error.to_string())?;
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| error.to_string())?;
+    let s3 = storage.s3_if(destination.capabilities().expiry_rules).ok_or_else(|| StorageError::Unsupported.to_string())?;
+    s3.remove_expiry_rules().await.map_err(|error| error.to_string())?;
     if record_result {
         record(core, &id, None);
         rules_removed(core, &id);
@@ -434,7 +432,7 @@ async fn sweep_one(core: &SharedCore, record: &crate::history::UploadRecord) -> 
     if !is_active(core, &destination.id) {
         return drop_entry(core, record);
     }
-    let storage = S3Provider::new(destination, credentials);
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| error.to_string())?;
     let written = storage.last_modified(&record.object_key).await.map_err(|error| error.to_string())?;
     match written {
         None => drop_entry(core, record),

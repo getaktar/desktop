@@ -1,6 +1,14 @@
-//! S3-compatible storage adapter. Every provider preset (AWS S3, Cloudflare
-//! R2, MinIO, Backblaze B2, DigitalOcean Spaces, custom) goes through this
-//! single adapter, never a separate upload engine per provider.
+//! Storage backends. Every S3 preset (AWS S3, Cloudflare R2, MinIO,
+//! Backblaze B2, DigitalOcean Spaces, custom) goes through the one
+//! `S3Provider` here, never a separate upload engine per provider. Callers
+//! get it through `backend` (see `backend.rs`), which is where other kinds
+//! of storage are added; only the S3-only operations (presigned URLs,
+//! lifecycle rules, CORS, multipart sessions) are called on `S3Provider`
+//! itself, after checking the destination's capabilities.
+
+mod backend;
+
+pub use backend::{backend, Backend};
 
 use std::path::Path;
 use std::pin::Pin;
@@ -118,6 +126,11 @@ pub enum StorageError {
     /// Every `{short}` key tried was taken; see `short_keys`.
     #[error("{}", t!("Couldn’t find an unused short name for this file after {0} tries. Nothing was overwritten. Try again.", crate::short_keys::MAX_SHORT_KEY_ATTEMPTS))]
     NoFreeShortKey,
+    /// Something the destination's kind of storage can't do (presigned
+    /// links on a kind without them, say). Callers check its capabilities
+    /// first, so this only stops one that didn't.
+    #[error("{}", t!("This destination can't do that."))]
+    Unsupported,
     #[error("{0}")]
     Unknown(String),
 }
@@ -228,6 +241,10 @@ impl S3Provider {
 
     fn bucket(&self) -> &str {
         &self.config.bucket
+    }
+
+    pub fn config(&self) -> &DestinationConfig {
+        &self.config
     }
 
     pub async fn test_connection(&self) -> Result<ConnectionResult, StorageError> {
@@ -637,12 +654,6 @@ impl S3Provider {
         }))
     }
 
-    /// The size of the object at exactly `key`, or None when there's none.
-    /// Watched folders check it before moving an uploaded original away.
-    pub async fn object_size(&self, key: &str) -> Result<Option<i64>, StorageError> {
-        Ok(self.object_info(key).await?.map(|object| object.size))
-    }
-
     /// S3 has no rename or move: both are a server-side copy followed by
     /// deleting the original.
     pub async fn copy(&self, source_key: &str, destination_key: &str) -> Result<(), StorageError> {
@@ -726,12 +737,6 @@ impl S3Provider {
             }
         }
         Ok(in_use)
-    }
-
-    /// When the object at exactly `key` was last written (Unix
-    /// milliseconds), or None when there's no such object.
-    pub async fn last_modified(&self, key: &str) -> Result<Option<i64>, StorageError> {
-        Ok(self.object_info(key).await?.map(|object| object.last_modified.unwrap_or_default()))
     }
 
     async fn put_lifecycle(&self, xml: Option<String>) -> Result<(), StorageError> {
@@ -1417,6 +1422,39 @@ mod tests {
         assert!(matches!(failure(400, "MalformedXML"), StorageError::Unknown(message) if message == "Details"));
         assert!(matches!(lifecycle_failure(500, "", "files"), StorageError::Unknown(message) if message == "HTTP 500"));
     }
+
+    fn keys() -> StorageCredentials {
+        StorageCredentials {
+            access_key_id: "AKID".into(),
+            secret_access_key: "secret".into(),
+            session_token: None,
+            cloudflare_token: None,
+            short_link_token: None,
+        }
+    }
+
+    #[test]
+    fn builds_an_s3_backend_for_every_preset() {
+        for preset in [
+            ProviderPreset::CloudflareR2,
+            ProviderPreset::AmazonS3,
+            ProviderPreset::MinIO,
+            ProviderPreset::BackblazeB2,
+            ProviderPreset::DigitalOceanSpaces,
+            ProviderPreset::CustomS3,
+        ] {
+            let mut destination = config("https://s3.example.com", "files", false);
+            destination.preset = preset;
+            destination.public_base_url = "https://cdn.example.com/files".into();
+            let storage = backend(&destination, &keys()).unwrap();
+            let s3 = storage.as_s3().expect("an S3 preset gets the S3 provider");
+            assert_eq!(s3.config(), &destination);
+            assert_eq!(storage.config(), &destination);
+            assert_eq!(storage.public_url("a b/c.png"), resolve_public_url(&destination.public_base_url, "a b/c.png"));
+            assert!(storage.s3_if(true).is_some());
+            assert!(storage.s3_if(false).is_none(), "a missing capability never reaches S3");
+        }
+    }
 }
 
 /// Runs against a real S3-compatible server, e.g. `moto_server -p 9100`
@@ -1508,7 +1546,7 @@ mod live_tests {
         }
         let sent = client.put(&url).header("content-type", "application/octet-stream").body("hello").send().await.unwrap();
         assert!(sent.status().is_success(), "{}", sent.status());
-        assert_eq!(storage.object_size(".aktar/requests/test/1").await.unwrap(), Some(5));
+        assert_eq!(storage.object_info(".aktar/requests/test/1").await.unwrap().map(|object| object.size), Some(5));
         storage.delete(".aktar/requests/test/1").await.unwrap();
         // With If-None-Match signed, the PUT must send it too.
         let conditional = storage.presigned_put(".aktar/requests/test/2", "application/json", true, 3600).await.unwrap();
@@ -1525,7 +1563,7 @@ mod live_tests {
     #[tokio::test]
     #[ignore]
     async fn round_trip() {
-        let Some(storage) = provider("aktar-test", "secret") else { return };
+        let Some(storage) = provider("aktar-test", "secret").map(Backend::S3) else { return };
 
         let result = storage.test_connection().await.unwrap();
         assert!(result.writable);
@@ -1555,7 +1593,7 @@ mod live_tests {
 
         assert!(crate::bucket::move_object(&storage, "live/aktar test ü.txt", "moved/renamed.txt", &[]).await.is_ok());
         assert!(!storage.object_exists("live/aktar test ü.txt").await.unwrap());
-        let signed = storage.temporary_url("moved/renamed.txt", 600).await.unwrap();
+        let signed = storage.as_s3().unwrap().temporary_url("moved/renamed.txt", 600).await.unwrap();
         assert!(signed.contains("X-Amz-Signature="));
         let body = reqwest::get(&signed).await.unwrap().text().await.unwrap();
         assert_eq!(body, "hello from aktar");
@@ -1609,7 +1647,7 @@ mod live_tests {
     #[ignore]
     async fn keeps_thumbnails_with_their_files() {
         use crate::thumbnails::{bucket as thumbnails, key_for, DEFAULT_PREFIX};
-        let Some(storage) = provider("aktar-test", "secret") else { return };
+        let Some(storage) = provider("aktar-test", "secret").map(Backend::S3) else { return };
         let prefixes = vec![DEFAULT_PREFIX.to_string(), "previews/".to_string()];
         let file = std::env::temp_dir().join("aktar-thumbnail-source.txt");
         std::fs::write(&file, b"a photo, say").unwrap();
@@ -1870,9 +1908,9 @@ mod live_tests {
         // the rules up, since the bucket would delete them too...
         storage.create_folder("tmp/7d/existing/").await.unwrap();
         assert_eq!(storage.expiry_prefixes_in_use().await.unwrap(), ["tmp/7d/"]);
-        let written = storage.last_modified("tmp/7d/existing/").await.unwrap().unwrap();
+        let written = storage.object_info("tmp/7d/existing/").await.unwrap().unwrap().last_modified.unwrap_or_default();
         assert!((written - crate::util::now_millis()).abs() < 10 * 60_000);
-        assert_eq!(storage.last_modified("tmp/7d/existing").await.unwrap(), None);
+        assert!(storage.object_info("tmp/7d/existing").await.unwrap().is_none());
         // ...and not once the rules are in place.
         assert_eq!(storage.ensure_expiry_rules().await.unwrap(), RulesStatus::Active);
         assert!(storage.expiry_prefixes_in_use().await.unwrap().is_empty());

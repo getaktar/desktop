@@ -29,11 +29,90 @@ pub enum ProviderPreset {
     CustomS3,
 }
 
+/// The kind of storage a destination is, told by its preset rather than a
+/// field of its own (docs/storage-backends.md in the Mac repo): an older
+/// version skips fields it doesn't know, so it would read a WebDAV
+/// destination with an S3 preset as S3, while an unknown preset makes it
+/// unreadable there and kept as it is. Only S3 exists for now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageKind {
+    S3,
+    Webdav,
+    Sftp,
+}
+
+/// What a destination's storage can do. Code asks the destination, not the
+/// preset, so a kind without, say, presigned URLs never gets to the code
+/// that needs them, and the controls for it can be hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    pub upload: bool,
+    pub delete: bool,
+    pub exists: bool,
+    #[serde(rename = "publicURL")]
+    pub public_url: bool,
+    /// Listing a folder: bucket browser, library, file requests'
+    /// collection, thumbnail cleanup.
+    pub list: bool,
+    /// Server-side copy, which moves and renames are made of.
+    pub copy: bool,
+    /// Uploads that fail rather than replace a file that appeared at their
+    /// key (If-None-Match: *); without them, short keys check first.
+    pub conditional_writes: bool,
+    /// Multipart uploads for files over `SINGLE_UPLOAD_LIMIT`, which can be
+    /// continued after a restart.
+    pub multipart: bool,
+    /// Presigned links (Link: 5 min ... 7 days, Copy Temporary Link).
+    pub temporary_links: bool,
+    /// Lifecycle rules, which "Delete after" relies on.
+    pub expiry_rules: bool,
+    /// Request Files: presigned PUTs and the bucket's CORS rules.
+    pub file_requests: bool,
+    pub bucket_thumbnails: bool,
+    pub share_pages: bool,
+    /// Set Up Cloudflare R2.
+    pub cloudflare_setup: bool,
+}
+
 impl ProviderPreset {
     /// Whether uploads can be made conditional (If-None-Match: *), so a
     /// file never lands on one that appeared at its key in the meantime.
     pub fn supports_conditional_writes(self) -> bool {
         matches!(self, ProviderPreset::AmazonS3 | ProviderPreset::CloudflareR2)
+    }
+
+    pub fn kind(self) -> StorageKind {
+        match self {
+            ProviderPreset::CloudflareR2
+            | ProviderPreset::AmazonS3
+            | ProviderPreset::MinIO
+            | ProviderPreset::BackblazeB2
+            | ProviderPreset::DigitalOceanSpaces
+            | ProviderPreset::CustomS3 => StorageKind::S3,
+        }
+    }
+
+    /// What a destination with this preset can do (see `Capabilities`).
+    pub fn capabilities(self) -> Capabilities {
+        let s3 = self.kind() == StorageKind::S3;
+        Capabilities {
+            upload: true,
+            delete: true,
+            exists: true,
+            public_url: true,
+            list: true,
+            copy: true,
+            conditional_writes: s3 && self.supports_conditional_writes(),
+            multipart: s3,
+            temporary_links: s3,
+            expiry_rules: s3,
+            file_requests: s3,
+            bucket_thumbnails: true,
+            share_pages: true,
+            cloudflare_setup: self == ProviderPreset::CloudflareR2,
+        }
     }
 
     /// The raw value the Mac app uses, which the local API reports as `provider`.
@@ -146,6 +225,24 @@ pub struct DestinationConfig {
     pub request_cors_origin: Option<String>,
 }
 
+/// A destination as the windows get it: its settings, plus its kind and
+/// what that can do, so a control the kind can't use can be hidden. Only
+/// for the windows; destinations.json keeps `DestinationConfig` alone, and
+/// the two extra fields are ignored when a window sends a destination back.
+#[derive(Debug, Clone, Serialize)]
+pub struct DestinationView {
+    #[serde(flatten)]
+    pub config: DestinationConfig,
+    pub kind: StorageKind,
+    pub capabilities: Capabilities,
+}
+
+impl From<DestinationConfig> for DestinationView {
+    fn from(config: DestinationConfig) -> Self {
+        Self { kind: config.kind(), capabilities: config.capabilities(), config }
+    }
+}
+
 /// How an encrypted destination's key is made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +332,20 @@ impl ImageProcessing {
 }
 
 impl DestinationConfig {
+    pub fn kind(&self) -> StorageKind {
+        self.preset.kind()
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        self.preset.capabilities()
+    }
+
+    /// `temporary_link` when this destination's kind can make temporary
+    /// links; a value saved for one that can't is ignored.
+    pub fn temporary_link_seconds(&self) -> Option<u64> {
+        self.temporary_link.filter(|_| self.capabilities().temporary_links)
+    }
+
     pub fn image_metadata(&self) -> ImageMetadataPolicy {
         self.image_metadata.unwrap_or_default()
     }
@@ -489,6 +600,64 @@ fn sync_default_flags(wrapper: &mut Wrapper) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PRESETS: [ProviderPreset; 6] = [
+        ProviderPreset::CloudflareR2,
+        ProviderPreset::AmazonS3,
+        ProviderPreset::MinIO,
+        ProviderPreset::BackblazeB2,
+        ProviderPreset::DigitalOceanSpaces,
+        ProviderPreset::CustomS3,
+    ];
+
+    #[test]
+    fn every_preset_is_s3_for_now() {
+        for preset in PRESETS {
+            assert_eq!(preset.kind(), StorageKind::S3, "{preset:?}");
+        }
+    }
+
+    #[test]
+    fn capabilities_follow_kind_and_preset() {
+        for preset in PRESETS {
+            let capabilities = preset.capabilities();
+            // What every S3 destination can do, the same as before there
+            // were capabilities.
+            assert!(capabilities.upload && capabilities.delete && capabilities.exists && capabilities.public_url);
+            assert!(capabilities.list && capabilities.copy);
+            assert!(capabilities.multipart && capabilities.temporary_links && capabilities.expiry_rules && capabilities.file_requests);
+            assert!(capabilities.bucket_thumbnails && capabilities.share_pages);
+            assert_eq!(capabilities.conditional_writes, preset.supports_conditional_writes(), "{preset:?}");
+            assert_eq!(capabilities.conditional_writes, matches!(preset, ProviderPreset::CloudflareR2 | ProviderPreset::AmazonS3));
+            assert_eq!(capabilities.cloudflare_setup, preset == ProviderPreset::CloudflareR2, "{preset:?}");
+        }
+    }
+
+    #[test]
+    fn temporary_links_need_the_capability() {
+        let mut destination: DestinationConfig = serde_json::from_str(&format!(r#"{{"id":"A",{BASE}}}"#)).unwrap();
+        assert_eq!(destination.temporary_link_seconds(), None);
+        destination.temporary_link = Some(3600);
+        assert_eq!(destination.temporary_link_seconds(), Some(3600));
+    }
+
+    #[test]
+    fn windows_get_kind_and_capabilities_but_the_file_does_not() {
+        let destination: DestinationConfig = serde_json::from_str(&format!(r#"{{"id":"A",{BASE}}}"#)).unwrap();
+        let view = serde_json::to_value(DestinationView::from(destination.clone())).unwrap();
+        assert_eq!(view["id"], "A");
+        assert_eq!(view["preset"], "minIO");
+        assert_eq!(view["kind"], "s3");
+        assert_eq!(view["capabilities"]["publicURL"], true);
+        assert_eq!(view["capabilities"]["temporaryLinks"], true);
+        assert_eq!(view["capabilities"]["conditionalWrites"], false);
+        assert_eq!(view["capabilities"]["cloudflareSetup"], false);
+        // Sent back by a window, the extra fields are dropped.
+        let back: DestinationConfig = serde_json::from_value(view).unwrap();
+        assert_eq!(back, destination);
+        let saved = serde_json::to_value(&destination).unwrap();
+        assert!(saved.get("kind").is_none() && saved.get("capabilities").is_none());
+    }
 
     #[test]
     fn reads_share_pages_and_encryption() {

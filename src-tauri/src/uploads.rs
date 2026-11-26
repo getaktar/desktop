@@ -26,7 +26,7 @@ use crate::quick_share::{self, Origin, PasteTarget, Stopped};
 use crate::remote_download::{self, Downloaded, RemoteSource};
 use crate::share_page::crypto::FileKey;
 use crate::short_keys::{self, ShortKeyTarget};
-use crate::storage::{BucketObject, Progress, S3Provider, StorageError, UploadResult, SINGLE_UPLOAD_LIMIT};
+use crate::storage::{Backend, BucketObject, Progress, S3Provider, StorageError, UploadResult, SINGLE_UPLOAD_LIMIT};
 use crate::{image_metadata, image_processing};
 use crate::t;
 use crate::thumbnails::ThumbnailMode;
@@ -1173,7 +1173,10 @@ async fn download_link(core: &SharedCore, job_id: &str, input: &UploadInput, rem
 /// Uploads the file, or finds it already uploaded.
 async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: &DestinationConfig) -> Result<Outcome, Failure> {
     let credentials = credentials::load(&destination.id).map_err(|error| error.to_string())?;
-    let provider = S3Provider::new(destination.clone(), credentials);
+    let provider = crate::storage::backend(destination, &credentials).map_err(|error| error.to_string())?;
+    // Multipart sessions are S3's: another kind sends a big file in one
+    // request and never has one to continue or abort.
+    let parts = provider.s3_if(destination.capabilities().multipart);
     let context = job_context(core, job_id);
 
     // A copied link: its file is downloaded first (once, kept for retries),
@@ -1368,10 +1371,10 @@ async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: 
     let source = (!zipped && encryption.is_none()).then(|| SourceFile::of(&input.path)).flatten();
     let key_basis = generated_key.then(|| key_basis_for(input, destination, &filename));
     let mut resumed = None;
-    if file_size > SINGLE_UPLOAD_LIMIT && encryption.is_none() {
+    if let (true, None, Some(parts)) = (file_size > SINGLE_UPLOAD_LIMIT, &encryption, parts) {
         if let Some(source) = &source {
             for outdated in core.upload_sessions.outdated_for(&destination.id, source) {
-                multipart::abort(&provider, &core.upload_sessions, &outdated).await;
+                multipart::abort(parts, &core.upload_sessions, &outdated).await;
             }
         }
         let busy: Vec<String> = core.uploads.job_sessions.lock().unwrap().iter().filter(|(job, _)| *job != job_id).map(|(_, id)| id.clone()).collect();
@@ -1403,7 +1406,7 @@ async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: 
                     if same && resumed.is_none() {
                         resumed = Some(session);
                     } else if !same {
-                        multipart::abort(&provider, &core.upload_sessions, &session).await;
+                        multipart::abort(parts, &core.upload_sessions, &session).await;
                     }
                 }
             }
@@ -1414,8 +1417,8 @@ async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: 
     let previous = core.uploads.job_sessions.lock().unwrap().get(job_id).cloned();
     if let Some(previous) = previous.filter(|id| resumed.as_ref().is_none_or(|session| session.id != *id)) {
         core.uploads.job_sessions.lock().unwrap().remove(job_id);
-        if let Some(session) = core.upload_sessions.get(&previous) {
-            multipart::abort(&provider, &core.upload_sessions, &session).await;
+        if let (Some(session), Some(parts)) = (core.upload_sessions.get(&previous), parts) {
+            multipart::abort(parts, &core.upload_sessions, &session).await;
         }
     }
 
@@ -1439,7 +1442,7 @@ async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: 
     };
     let progress = Arc::new(Progress::default());
     // Only S3 and R2 are known to honor If-None-Match on uploads.
-    let only_if_new = input.keep_existing && input.object_key.is_some() && destination.preset.supports_conditional_writes();
+    let only_if_new = input.keep_existing && input.object_key.is_some() && destination.capabilities().conditional_writes;
     let sending = Sending {
         core,
         job_id,
@@ -1475,9 +1478,9 @@ async fn run(core: &SharedCore, job_id: &str, input: &UploadInput, destination: 
         if short_key {
             let mut target = ShortUpload { sending: &sending, resumed, pinned: short_pinned, first_attempt_at: context.first_attempt_at };
             let new_key = || object_key_for(input, destination, &key_filename, hashes.as_ref(), new_extension);
-            return short_keys::write_short_key(&mut target, object_key.clone(), destination.preset.supports_conditional_writes(), new_key).await;
+            return short_keys::write_short_key(&mut target, object_key.clone(), destination.capabilities().conditional_writes, new_key).await;
         }
-        if file_size <= SINGLE_UPLOAD_LIMIT {
+        if !sending.in_parts() {
             let mut key = object_key.clone();
             let mut taken = Vec::new();
             loop {
@@ -1635,7 +1638,7 @@ fn replaced_target(core: &SharedCore, replacing: &Replacing, destination: &Desti
 
 /// What a share page is written from.
 struct PageSource<'a> {
-    provider: &'a S3Provider,
+    provider: &'a Backend,
     destination: &'a DestinationConfig,
     input: &'a UploadInput,
     object_key: &'a str,
@@ -1657,13 +1660,13 @@ impl PageSource<'_> {
         use crate::share_page::{Encrypted, Kind, Page, PageFile};
         let destination = self.destination;
         let now = crate::util::now_millis();
-        let seconds = destination.temporary_link;
+        let seconds = destination.temporary_link_seconds();
         let signed = |key: String| {
             let provider = self.provider;
             async move {
                 let public = output::resolve_public_url(&destination.public_base_url, &key);
                 match seconds {
-                    Some(seconds) => provider.temporary_url(&key, seconds).await.unwrap_or(public),
+                    Some(seconds) => signed_or(provider, &key, seconds, public).await,
                     None => public,
                 }
             }
@@ -1726,7 +1729,7 @@ impl PageSource<'_> {
 struct Sending<'a> {
     core: &'a SharedCore,
     job_id: &'a str,
-    provider: &'a S3Provider,
+    provider: &'a Backend,
     destination: &'a DestinationConfig,
     path: &'a Path,
     content_type: &'a str,
@@ -1738,16 +1741,28 @@ struct Sending<'a> {
 }
 
 impl Sending<'_> {
+    /// Whether the file goes in parts: it's over `SINGLE_UPLOAD_LIMIT` and
+    /// the storage takes multipart uploads. Otherwise it's one request.
+    fn in_parts(&self) -> bool {
+        self.file_size > SINGLE_UPLOAD_LIMIT && self.destination.capabilities().multipart
+    }
+
+    /// The provider multipart sessions go to (see `in_parts`).
+    fn parts(&self) -> Result<&S3Provider, StorageError> {
+        self.provider.s3_if(self.destination.capabilities().multipart).ok_or(StorageError::Unsupported)
+    }
+
     /// Sends the file in parts to `key`: continuing `resumed` (whose key it
     /// is), or a new multipart upload. `only_if_new` as for
     /// `multipart::upload`.
     async fn multipart(&self, key: &str, resumed: Option<Session>, only_if_new: bool) -> Result<(), StorageError> {
+        let parts = self.parts()?;
         let resuming = resumed.is_some();
         let session: Session = match resumed {
             Some(session) => session,
             None => {
                 multipart::start(
-                    self.provider,
+                    parts,
                     &self.core.upload_sessions,
                     &self.destination.id,
                     &self.destination.bucket,
@@ -1766,7 +1781,7 @@ impl Sending<'_> {
             set_resuming(self.core, self.job_id);
         }
         let result = multipart::upload(
-            self.provider,
+            parts,
             &self.core.upload_sessions,
             session,
             self.path,
@@ -1828,7 +1843,7 @@ impl ShortKeyTarget for ShortUpload<'_> {
     async fn write(&mut self, key: &str, only_if_new: bool) -> Result<(), StorageError> {
         let sending = self.sending;
         update_job(sending.core, sending.job_id, |job| job.sending = Some((key.to_string(), sending.file_size)));
-        let result = if sending.file_size <= SINGLE_UPLOAD_LIMIT {
+        let result = if !sending.in_parts() {
             sending.provider.upload(sending.path, key, sending.content_type, sending.progress.clone(), only_if_new).await.map(drop)
         } else {
             // A continued upload keeps its key unless that one is taken;
@@ -1837,7 +1852,7 @@ impl ShortKeyTarget for ShortUpload<'_> {
             let mut resumed = self.resumed.take();
             if let Some(session) = resumed.take_if(|session| session.object_key != key) {
                 sending.core.uploads.job_sessions.lock().unwrap().remove(sending.job_id);
-                multipart::abort(sending.provider, &sending.core.upload_sessions, &session).await;
+                multipart::abort(sending.parts()?, &sending.core.upload_sessions, &session).await;
             }
             sending.multipart(key, resumed, only_if_new).await
         };
@@ -1918,13 +1933,21 @@ fn with_extension(key: &str, extension: Option<&str>) -> String {
 /// The link to copy: the public URL, or a fresh temporary link when the
 /// destination is set to one. Signing happens locally, so it only fails on
 /// a broken endpoint, where the public URL is the better fallback.
-async fn link_for(provider: &S3Provider, destination: &DestinationConfig, object_key: &str, public_url: &str) -> String {
-    if let Some(seconds) = destination.temporary_link {
-        if let Ok(signed) = provider.temporary_url(object_key, seconds).await {
-            return signed;
-        }
+async fn link_for(provider: &Backend, destination: &DestinationConfig, object_key: &str, public_url: &str) -> String {
+    match destination.temporary_link_seconds() {
+        Some(seconds) => signed_or(provider, object_key, seconds, public_url.to_string()).await,
+        None => public_url.to_string(),
     }
-    public_url.to_string()
+}
+
+/// A temporary link valid `seconds` to `key`, or `public` when it can't be
+/// made. Callers only ask when the destination is set to temporary links
+/// (`DestinationConfig::temporary_link_seconds`), which only S3 makes.
+async fn signed_or(provider: &Backend, key: &str, seconds: u64, public: String) -> String {
+    match provider.as_s3() {
+        Some(s3) => s3.temporary_url(key, seconds).await.unwrap_or(public),
+        None => public,
+    }
 }
 
 /// How much later than its history record an uploaded object may be dated
@@ -1938,7 +1961,7 @@ const REUSE_DATE_LEEWAY_MILLIS: i64 = 5 * 60_000;
 /// None when the bucket can't be asked: then the file is just uploaded.
 async fn earlier_upload(
     core: &SharedCore,
-    provider: &S3Provider,
+    provider: &Backend,
     destination: &DestinationConfig,
     input: &UploadInput,
     sha256: &str,
@@ -2314,7 +2337,7 @@ async fn update_bucket_thumbnails(core: SharedCore, destination: DestinationConf
         return;
     }
     let Ok(credentials) = credentials::load(&destination.id) else { return };
-    let storage = S3Provider::new(destination.clone(), credentials);
+    let Ok(storage) = crate::storage::backend(&destination, &credentials) else { return };
     if let (Some(prefix), Some(data)) = (destination.bucket_thumbnail_prefix(), thumbnail.filter(|data| crate::thumbnails::is_webp(data))) {
         if crate::thumbnails::bucket::save(&storage, data, &object_key, &prefix).await.is_ok() {
             stale.retain(|other| *other != prefix);
@@ -2480,15 +2503,15 @@ async fn write_gallery(core: &SharedCore, files: &[GalleryFile]) -> Result<Strin
     let first = files.first().ok_or_else(|| "no files".to_string())?;
     let destination = &first.destination;
     let credentials = credentials::load(&destination.id).map_err(|error| error.to_string())?;
-    let provider = S3Provider::new(destination.clone(), credentials);
+    let provider = crate::storage::backend(destination, &credentials).map_err(|error| error.to_string())?;
     let now = crate::util::now_millis();
-    let seconds = destination.temporary_link;
+    let seconds = destination.temporary_link_seconds();
     let link_to = |key: &str, public: String| {
         let provider = &provider;
         let key = key.to_string();
         async move {
             match seconds {
-                Some(seconds) => provider.temporary_url(&key, seconds).await.unwrap_or(public),
+                Some(seconds) => signed_or(provider, &key, seconds, public).await,
                 None => public,
             }
         }
@@ -2631,10 +2654,9 @@ pub async fn temporary_url(core: &SharedCore, record: &UploadRecord, seconds: u6
         .find(|destination| destination.id == record.destination_id)
         .ok_or_else(|| t!("This upload’s destination was removed."))?;
     let credentials = credentials::load(&destination.id).map_err(|error| error.to_string())?;
-    S3Provider::new(destination, credentials)
-        .temporary_url(&record.object_key, seconds)
-        .await
-        .map_err(|error| error.to_string())
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| error.to_string())?;
+    let s3 = storage.s3_if(destination.capabilities().temporary_links).ok_or_else(|| StorageError::Unsupported.to_string())?;
+    s3.temporary_url(&record.object_key, seconds).await.map_err(|error| error.to_string())
 }
 
 /// Deletes the remote object and, on success, the history entry. If the
@@ -2673,7 +2695,7 @@ async fn delete_record(core: &SharedCore, record_id: &str, clean_up_short_links:
         match credentials::load(&destination.id) {
             Ok(credentials) => {
                 let prefixes = crate::thumbnails::bucket_prefixes(&destination, &core.destinations.all());
-                let storage = S3Provider::new(destination.clone(), credentials);
+                let storage = crate::storage::backend(&destination, &credentials)?;
                 crate::bucket::delete_object(&storage, &record.object_key, &prefixes).await?;
                 // Its page goes with it, unless other files share it (a
                 // gallery). One that's gone already is fine.

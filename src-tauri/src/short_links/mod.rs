@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::core::{events, SharedCore};
 use crate::destinations::DestinationConfig;
 use crate::history::UploadRecord;
-use crate::storage::S3Provider;
+use crate::storage::Backend;
 use crate::t;
 use definition::ShortLinkSettings;
 use engine::{Created, Engine, Operations, ShortLinkError};
@@ -316,7 +316,7 @@ pub enum MoveStatus {
 pub async fn move_object(
     core: &SharedCore,
     destination: &DestinationConfig,
-    storage: &S3Provider,
+    storage: &Backend,
     from: &str,
     new_key: &str,
     prefixes: &[String],

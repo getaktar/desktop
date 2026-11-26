@@ -249,7 +249,8 @@ async fn delete_upload_of(core: &SharedCore, folder_id: &str, destination_id: &s
         .ok_or_else(|| (t!("This upload’s destination was removed."), false))?;
     let credentials = crate::credentials::load(&destination.id).map_err(|error| (error.to_string(), false))?;
     let prefixes = crate::thumbnails::bucket_prefixes(&destination, &core.destinations.all());
-    crate::bucket::delete_object(&crate::storage::S3Provider::new(destination.clone(), credentials), object_key, &prefixes)
+    let storage = crate::storage::backend(&destination, &credentials).map_err(|error| (error.to_string(), false))?;
+    crate::bucket::delete_object(&storage, object_key, &prefixes)
         .await
         .map_err(|error| (error.to_string(), error.is_transient()))?;
     crate::thumbnails::remote::forget(core, &destination.id, object_key);
@@ -372,7 +373,7 @@ pub async fn upload_succeeded(core: &SharedCore, source: &WatchedSource, destina
 /// Whether the object is in the bucket with the size that was uploaded.
 async fn verify(destination: &DestinationConfig, uploaded: &Uploaded) -> bool {
     let Ok(credentials) = crate::credentials::load(&destination.id) else { return false };
-    let provider = crate::storage::S3Provider::new(destination.clone(), credentials);
+    let Ok(provider) = crate::storage::backend(destination, &credentials) else { return false };
     matches!(provider.object_size(&uploaded.object_key).await, Ok(Some(size)) if size == uploaded.byte_size)
 }
 

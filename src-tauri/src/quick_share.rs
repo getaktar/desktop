@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::core::{events, SharedCore};
 use crate::destinations::DestinationConfig;
 use crate::outbox::{EarlyLink, EarlyShortLink, OutboxEntry};
-use crate::storage::S3Provider;
+use crate::storage::Backend;
 use crate::t;
 use crate::uploads::{self, JobState, UploadInput};
 use crate::win32::{self, ClipboardSnapshot, Snapshot, ToastButton};
@@ -280,25 +280,25 @@ pub async fn copy_early_link(
     job_id: &str,
     input: &UploadInput,
     destination: &DestinationConfig,
-    provider: &S3Provider,
+    provider: &Backend,
     object_key: &str,
     filename: &str,
     page: bool,
 ) -> EarlyLink {
     use crate::short_links::{rules::Shortening, Attempt};
     let linked_key = if page { crate::share_page::page_key(object_key) } else { object_key.to_string() };
-    let public_url = crate::output::resolve_public_url(&destination.public_base_url, &linked_key);
+    let public_url = provider.public_url(&linked_key);
     let now = crate::util::now_millis();
     // Signing happens on this PC, so it works offline too.
     let mut link = public_url.clone();
-    let mut file_link = crate::output::resolve_public_url(&destination.public_base_url, object_key);
+    let mut file_link = provider.public_url(object_key);
     let mut temporary_expires_at = None;
-    if let Some(seconds) = destination.temporary_link {
-        if let Ok(signed) = provider.temporary_url(&linked_key, seconds).await {
+    if let (Some(seconds), Some(s3)) = (destination.temporary_link_seconds(), provider.as_s3()) {
+        if let Ok(signed) = s3.temporary_url(&linked_key, seconds).await {
             link = signed;
             temporary_expires_at = Some(now + seconds as i64 * 1000);
         }
-        if let Ok(signed) = provider.temporary_url(object_key, seconds).await {
+        if let Ok(signed) = s3.temporary_url(object_key, seconds).await {
             file_link = signed;
         }
     }
@@ -439,7 +439,7 @@ pub fn take_back(destination: DestinationConfig, key: String, size: u64, first_a
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let Ok(credentials) = crate::credentials::load(&destination.id) else { return };
-        let provider = S3Provider::new(destination, credentials);
+        let Ok(provider) = crate::storage::backend(&destination, &credentials) else { return };
         let Ok(Some(object)) = provider.object_info(&key).await else { return };
         let own = object.size == size as i64 && object.last_modified.is_some_and(|modified| modified >= first_attempt_at - 120_000);
         if own {

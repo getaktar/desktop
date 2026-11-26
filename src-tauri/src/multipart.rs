@@ -308,7 +308,13 @@ pub fn abort_in_background(core: &SharedCore, session: Session) {
         let credentials = destination.as_ref().and_then(|destination| credentials::load(&destination.id).ok());
         match (destination, credentials) {
             (Some(destination), Some(credentials)) if destination.bucket == session.bucket => {
-                abort(&S3Provider::new(destination, credentials), &core.upload_sessions, &session).await;
+                // Only S3 destinations have sessions; one whose kind
+                // can't have any is just forgotten.
+                let storage = crate::storage::backend(&destination, &credentials).ok();
+                match storage.as_ref().and_then(|storage| storage.s3_if(destination.capabilities().multipart)) {
+                    Some(provider) => abort(provider, &core.upload_sessions, &session).await,
+                    None => core.upload_sessions.remove(&session.id),
+                }
             }
             _ => core.upload_sessions.remove(&session.id),
         }

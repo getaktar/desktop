@@ -67,7 +67,7 @@ use crate::credentials::{self, CredentialError};
 use crate::destinations::DestinationConfig;
 use crate::history::UploadRecord;
 use crate::output::{self, resolve_public_url, OutputMode};
-use crate::storage::{BucketListing, BucketObject, S3Provider};
+use crate::storage::{BucketListing, BucketObject};
 use crate::uploads::{self, Expiry, JobState, UploadInput};
 use crate::util::iso8601;
 
@@ -365,7 +365,10 @@ async fn upload_body(core: &SharedCore, request: &Request) -> Response {
     let mut input = UploadInput { original_filename: filename.clone(), expiry, short_link: short, ..UploadInput::from_path(path) };
     if let Some(prefix) = prefix {
         let key = match credentials::load(&destination.id) {
-            Ok(creds) => bucket::available_key(&S3Provider::new(destination.clone(), creds), &filename, &prefix, &[]).await,
+            Ok(creds) => match crate::storage::backend(&destination, &creds) {
+                Ok(storage) => bucket::available_key(&storage, &filename, &prefix, &[]).await,
+                Err(error) => Err(error),
+            },
             Err(error) => {
                 let _ = tokio::fs::remove_dir_all(&directory).await;
                 return credential_failure(error);
@@ -619,7 +622,10 @@ struct LinkBody {
 
 async fn handle_bucket(core: &SharedCore, request: &Request, destination: DestinationConfig, route: &[&str]) -> Response {
     let storage = match credentials::load(&destination.id) {
-        Ok(creds) => S3Provider::new(destination.clone(), creds),
+        Ok(creds) => match crate::storage::backend(&destination, &creds) {
+            Ok(storage) => storage,
+            Err(error) => return Response::error(409, error.to_string()),
+        },
         Err(error) => return credential_failure(error),
     };
 
@@ -759,9 +765,13 @@ async fn handle_bucket(core: &SharedCore, request: &Request, destination: Destin
                 Ok(body) => body,
                 Err(response) => return response,
             };
+            // Presigned links are S3's alone; another kind can't make one.
+            let Some(s3) = storage.as_s3().filter(|_| destination.capabilities().temporary_links) else {
+                return Response::error(409, "This destination can't make temporary links.");
+            };
             // SigV4 presigned URLs are capped at seven days.
             let seconds = body.expires_in.unwrap_or(3600).clamp(60, 604_800);
-            match storage.temporary_url(&body.key, seconds as u64).await {
+            match s3.temporary_url(&body.key, seconds as u64).await {
                 Ok(url) => Response::json(
                     200,
                     serde_json::json!({ "url": url, "expiresAt": iso8601(crate::util::now_millis() + seconds * 1000) }),
