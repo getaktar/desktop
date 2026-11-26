@@ -8,6 +8,7 @@ import {
   type FileRequest,
   type Job,
   type LocalApiState,
+  type PresetInfo,
   type Settings,
   type ShortLinkDefinition,
   type UpdateStatus,
@@ -59,6 +60,10 @@ export function useLive<T>(load: () => Promise<T>, eventNames: string[], initial
 
 export const useDestinations = () =>
   useLive<DestinationConfig[]>(api.listDestinations, [events.destinationsChanged, events.languageChanged], []);
+
+/** Every preset with its kind and capabilities; they don't change while
+ * the app runs. Empty until they've loaded. */
+export const usePresetInfos = () => useLive<PresetInfo[]>(api.storagePresets, [], [])[0];
 
 export const useJobs = () => useLive<Job[]>(api.listJobs, [events.jobsChanged], []);
 

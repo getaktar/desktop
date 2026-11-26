@@ -20,6 +20,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import {
   api,
   errorMessage,
+  kindOfPreset,
   type ConnectionResult,
   type DestinationConfig,
   type QrMatrix,
@@ -674,7 +675,7 @@ export function ImportDestinationDialog({
                   {isTesting ? (
                     <Spinner size="tiny" labelPosition="after" label={t("Testing…")} className="import-testing" />
                   ) : (
-                    <ConnectionTestResult result={testResult} error={testError} />
+                    <ConnectionTestResult result={testResult} error={testError} kind={kindOfPreset(saved.destination.preset)} />
                   )}
                 </DialogContent>
               )}
@@ -753,8 +754,8 @@ function ImportReview({
   ];
   const template = destination.outputMode === "custom" ? payload.customTemplate?.trim() : null;
   const rows: [string, string[]][] = [
-    [t("Endpoint"), [addressHost(destination.endpoint)]],
-    [t("Bucket"), [destination.bucket]],
+    [kindOfPreset(destination.preset) === "s3" ? t("Endpoint") : t("Server URL"), [addressHost(destination.endpoint)]],
+    [t("Bucket"), destination.bucket.trim() ? [destination.bucket] : []],
     [t("Public Base URL"), destination.publicBaseURL.trim() ? [addressHost(destination.publicBaseURL)] : []],
     [t("Short Links"), destination.shortLinks ? shortLinkHosts(destination.shortLinks, providers) : []],
     [t("After Upload"), unique(webhooks.map((hook) => addressHost(hook.target)))],

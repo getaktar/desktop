@@ -27,13 +27,19 @@ pub enum ProviderPreset {
     DigitalOceanSpaces,
     #[serde(rename = "customS3")]
     CustomS3,
+    /// Any WebDAV server: Nextcloud, ownCloud, Synology, a Hetzner Storage
+    /// Box, Apache or nginx, `rclone serve webdav`. `endpoint` is the folder
+    /// uploads go into, `bucket` and `region` are empty, and the user name
+    /// and password are kept as the access key ID and secret.
+    #[serde(rename = "webdav")]
+    Webdav,
 }
 
 /// The kind of storage a destination is, told by its preset rather than a
 /// field of its own (docs/storage-backends.md in the Mac repo): an older
 /// version skips fields it doesn't know, so it would read a WebDAV
 /// destination with an S3 preset as S3, while an unknown preset makes it
-/// unreadable there and kept as it is. Only S3 exists for now.
+/// unreadable there and kept as it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageKind {
@@ -91,6 +97,7 @@ impl ProviderPreset {
             | ProviderPreset::BackblazeB2
             | ProviderPreset::DigitalOceanSpaces
             | ProviderPreset::CustomS3 => StorageKind::S3,
+            ProviderPreset::Webdav => StorageKind::Webdav,
         }
     }
 
@@ -124,6 +131,7 @@ impl ProviderPreset {
             ProviderPreset::BackblazeB2 => "backblazeB2",
             ProviderPreset::DigitalOceanSpaces => "digitalOceanSpaces",
             ProviderPreset::CustomS3 => "customS3",
+            ProviderPreset::Webdav => "webdav",
         }
     }
 
@@ -135,8 +143,34 @@ impl ProviderPreset {
             ProviderPreset::BackblazeB2 => "Backblaze B2".into(),
             ProviderPreset::DigitalOceanSpaces => "DigitalOcean Spaces".into(),
             ProviderPreset::CustomS3 => t!("Other S3-Compatible"),
+            ProviderPreset::Webdav => "WebDAV".into(),
         }
     }
+}
+
+/// Every preset, in the order the destination form offers them.
+pub const PRESETS: [ProviderPreset; 7] = [
+    ProviderPreset::CloudflareR2,
+    ProviderPreset::AmazonS3,
+    ProviderPreset::MinIO,
+    ProviderPreset::BackblazeB2,
+    ProviderPreset::DigitalOceanSpaces,
+    ProviderPreset::CustomS3,
+    ProviderPreset::Webdav,
+];
+
+/// A preset as the destination form gets it, so it can show the fields and
+/// controls of the kind being picked before anything is saved.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetInfo {
+    pub preset: ProviderPreset,
+    pub kind: StorageKind,
+    pub capabilities: Capabilities,
+}
+
+pub fn preset_infos() -> Vec<PresetInfo> {
+    PRESETS.iter().map(|&preset| PresetInfo { preset, kind: preset.kind(), capabilities: preset.capabilities() }).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,6 +410,14 @@ impl DestinationConfig {
     /// Settings that can't be right (edited by hand, or from a newer
     /// version) are dropped, so they fall back to the defaults.
     pub(crate) fn sanitize(&mut self) {
+        // Only S3 has buckets, regions and path styles; the file keeps
+        // the fields, empty (docs/storage-backends.md).
+        if self.kind() != StorageKind::S3 {
+            self.bucket.clear();
+            self.region.clear();
+            self.force_path_style = false;
+            self.account_id = None;
+        }
         if self.expiry_days.is_some_and(|days| days != 0 && !crate::expiry::is_valid(days)) {
             self.expiry_days = None;
         }
@@ -601,7 +643,7 @@ fn sync_default_flags(wrapper: &mut Wrapper) {
 mod tests {
     use super::*;
 
-    const PRESETS: [ProviderPreset; 6] = [
+    const S3_PRESETS: [ProviderPreset; 6] = [
         ProviderPreset::CloudflareR2,
         ProviderPreset::AmazonS3,
         ProviderPreset::MinIO,
@@ -611,15 +653,25 @@ mod tests {
     ];
 
     #[test]
-    fn every_preset_is_s3_for_now() {
-        for preset in PRESETS {
+    fn presets_tell_the_kind() {
+        for preset in S3_PRESETS {
             assert_eq!(preset.kind(), StorageKind::S3, "{preset:?}");
+        }
+        assert_eq!(ProviderPreset::Webdav.kind(), StorageKind::Webdav);
+        assert_eq!(ProviderPreset::Webdav.raw_value(), "webdav");
+        assert_eq!(ProviderPreset::Webdav.display_name(), "WebDAV");
+        assert_eq!(serde_json::to_value(ProviderPreset::Webdav).unwrap(), "webdav");
+        assert_eq!(serde_json::from_str::<ProviderPreset>(r#""webdav""#).unwrap(), ProviderPreset::Webdav);
+        // Every preset is offered once, and its raw value is its JSON name.
+        assert_eq!(PRESETS.len(), S3_PRESETS.len() + 1);
+        for preset in PRESETS {
+            assert_eq!(serde_json::to_value(preset).unwrap(), preset.raw_value());
         }
     }
 
     #[test]
     fn capabilities_follow_kind_and_preset() {
-        for preset in PRESETS {
+        for preset in S3_PRESETS {
             let capabilities = preset.capabilities();
             // What every S3 destination can do, the same as before there
             // were capabilities.
@@ -631,6 +683,44 @@ mod tests {
             assert_eq!(capabilities.conditional_writes, matches!(preset, ProviderPreset::CloudflareR2 | ProviderPreset::AmazonS3));
             assert_eq!(capabilities.cloudflare_setup, preset == ProviderPreset::CloudflareR2, "{preset:?}");
         }
+        // docs/storage-backends.md, Capabilities: WebDAV does everything
+        // but what only S3 has.
+        let webdav = ProviderPreset::Webdav.capabilities();
+        assert!(webdav.upload && webdav.delete && webdav.exists && webdav.public_url && webdav.list && webdav.copy);
+        assert!(webdav.bucket_thumbnails && webdav.share_pages);
+        assert!(!webdav.conditional_writes && !webdav.multipart && !webdav.temporary_links);
+        assert!(!webdav.expiry_rules && !webdav.file_requests && !webdav.cloudflare_setup);
+    }
+
+    #[test]
+    fn the_form_gets_each_presets_capabilities() {
+        let infos = serde_json::to_value(preset_infos()).unwrap();
+        let infos = infos.as_array().unwrap();
+        assert_eq!(infos.len(), PRESETS.len());
+        let webdav = infos.iter().find(|info| info["preset"] == "webdav").unwrap();
+        assert_eq!(webdav["kind"], "webdav");
+        assert_eq!(webdav["capabilities"]["temporaryLinks"], false);
+        assert_eq!(webdav["capabilities"]["expiryRules"], false);
+        assert_eq!(webdav["capabilities"]["fileRequests"], false);
+        assert_eq!(webdav["capabilities"]["sharePages"], true);
+        let r2 = infos.iter().find(|info| info["preset"] == "cloudflareR2").unwrap();
+        assert_eq!((r2["kind"].as_str(), r2["capabilities"]["cloudflareSetup"].as_bool()), (Some("s3"), Some(true)));
+    }
+
+    #[test]
+    fn webdav_settings_s3_only_controls_are_ignored() {
+        let json = r#"{"id":"W","name":"Cloud","preset":"webdav","endpoint":"https://cloud.example.com/remote.php/dav/files/me/aktar","region":"auto","bucket":"left over","publicBaseURL":"https://files.example.com","objectPathTemplate":"{uuid}.{ext}","forcePathStyle":true,"temporaryLink":3600,"expiryDays":7}"#;
+        let mut destination: DestinationConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(destination.kind(), StorageKind::Webdav);
+        // Kept as saved, but never used.
+        assert_eq!(destination.temporary_link, Some(3600));
+        assert_eq!(destination.temporary_link_seconds(), None);
+        destination.sanitize();
+        // The S3 fields are empty for WebDAV, as the file format says.
+        assert_eq!((destination.bucket.as_str(), destination.region.as_str(), destination.force_path_style), ("", "", false));
+        let view = serde_json::to_value(DestinationView::from(destination)).unwrap();
+        assert_eq!(view["kind"], "webdav");
+        assert_eq!(view["preset"], "webdav");
     }
 
     #[test]

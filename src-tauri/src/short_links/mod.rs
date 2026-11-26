@@ -126,7 +126,7 @@ pub async fn create_for_record(core: &SharedCore, record: &UploadRecord) -> Resu
     let mut temporary_expires_at = None;
     let settings = destination.short_links.as_ref();
     if let (Some(seconds), true) = (
-        destination.temporary_link,
+        destination.temporary_link_seconds(),
         settings.is_some_and(|settings| {
             settings.shorten_temporary_links && rules::can_shorten_temporary_links(settings.definition().map(|definition| &definition.capabilities))
         }),

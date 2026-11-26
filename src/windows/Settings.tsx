@@ -53,7 +53,7 @@ import { ShortcutRecorder } from "../components/ShortcutRecorder";
 import { CaptureToolsSection, useCaptureTools } from "./settings/CaptureTools";
 import { ImportDestinationDialog, ShareDestinationDialog, type ShareRequest } from "../components/TransferDialogs";
 import { api, errorMessage, events, type AppShortcut, type DestinationConfig, type OutputMode, type Settings } from "../lib/api";
-import { formatBytes, providerName } from "../lib/format";
+import { formatBytes, providerName, storageLocation } from "../lib/format";
 import { useDestinations, useFlag, useLocalApi, useSettings, useTauriEvent, useUpdateStatus } from "../lib/hooks";
 import { useI18n, websiteURL } from "../lib/i18n";
 import { links } from "../lib/links";
@@ -507,7 +507,7 @@ function DestinationsSettings({
                   key={destination.id}
                   icon={<ProviderIcon preset={destination.preset} />}
                   title={destination.name}
-                  subtitle={`${providerName(destination.preset, t)} · ${destination.bucket}`}
+                  subtitle={`${providerName(destination.preset, t)} · ${storageLocation(destination)}`}
                 >
                   {destination.isDefault && (
                     <Text size={200} className="secondary">

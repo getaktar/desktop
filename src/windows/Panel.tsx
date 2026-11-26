@@ -48,6 +48,7 @@ import { ExpiryBadge, FileIcon, Thumbnail } from "../components/FileVisuals";
 import { JobStatusLine } from "../components/JobStatus";
 import {
   api,
+  canDo,
   effectiveDeleteAfterDays,
   errorMessage,
   events,
@@ -180,6 +181,10 @@ export default function Panel() {
   // whatever the setting says: nothing uploaded there expires.
   const deleteAfterDays = effectiveDeleteAfterDays(settings, currentDestination);
   const rulesActive = expiryRulesActive(settings, currentDestination?.id);
+  // With no destination yet, both show as before (and can't be used).
+  const showsDeleteAfter = !currentDestination || canDo(currentDestination, "expiryRules");
+  const showsLink = !currentDestination || canDo(currentDestination, "temporaryLinks");
+  const canRequestFiles = destinations.some((destination) => canDo(destination, "fileRequests"));
 
   const setUpExpiry = async () => {
     if (!currentDestination) return;
@@ -271,14 +276,16 @@ export default function Panel() {
               {t("Upload")}
             </Text>
             <div className="inline-row">
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={<MailInboxArrowDownRegular />}
-                aria-label={t("Request Files…")}
-                title={t("Request Files…")}
-                onClick={() => setRequestingFiles(true)}
-              />
+              {(canRequestFiles || destinations.length === 0) && (
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  icon={<MailInboxArrowDownRegular />}
+                  aria-label={t("Request Files…")}
+                  title={t("Request Files…")}
+                  onClick={() => setRequestingFiles(true)}
+                />
+              )}
               <Button
                 appearance="subtle"
                 size="small"
@@ -291,16 +298,21 @@ export default function Panel() {
           </div>
 
           <DestinationPicker destinations={destinations} />
-          <div className="picker-row">
-            <DeleteAfterPicker
-              destination={currentDestination}
-              days={deleteAfterDays}
-              available={rulesActive}
-              isSettingUp={isSettingUpExpiry}
-              onSetUp={setUpExpiry}
-            />
-            <LinkPicker destination={currentDestination} />
-          </div>
+          {/* Only what the destination's storage can do (not WebDAV). */}
+          {(showsDeleteAfter || showsLink) && (
+            <div className="picker-row">
+              {showsDeleteAfter && (
+                <DeleteAfterPicker
+                  destination={currentDestination}
+                  days={deleteAfterDays}
+                  available={rulesActive}
+                  isSettingUp={isSettingUpExpiry}
+                  onSetUp={setUpExpiry}
+                />
+              )}
+              {showsLink && <LinkPicker destination={currentDestination} />}
+            </div>
+          )}
 
           <div
             className={`dropzone ${isTargeted ? "dropzone-targeted" : ""}`}
@@ -840,7 +852,7 @@ function RecentRow({
     ...shortLinkMenu(record, destinations, t, onError),
     { label: t("Copy Markdown"), onClick: () => copy("markdown") },
     { label: t("Copy HTML"), onClick: () => copy("html") },
-    temporaryLinkMenu(record, t, onError),
+    ...temporaryLinkMenu(record, destinations, t, onError),
     { label: t("Show QR Code"), onClick: () => setShowingQr(true) },
     "divider",
     { label: t("Open in Browser"), onClick: () => api.openUrl(recordLink(record)) },

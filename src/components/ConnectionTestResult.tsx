@@ -1,14 +1,24 @@
 import { Text } from "@fluentui/react-components";
 
-import type { ConnectionResult, PublicLinkCheck } from "../lib/api";
+import type { ConnectionResult, PublicLinkCheck, StorageKind } from "../lib/api";
 import { useI18n, type Translate } from "../lib/i18n";
 
 /** What Test Connection found, in the destination form and after an
  * import: why it couldn't reach the bucket at all (`error`), or one line
  * per step of the test, so a bucket that takes uploads but won't serve
- * them reads as a problem instead of a success. */
-export function ConnectionTestResult({ result, error }: { result: ConnectionResult | null; error: string | null }) {
+ * them reads as a problem instead of a success. `kind` words the hints
+ * for a folder on a WebDAV server rather than a bucket. */
+export function ConnectionTestResult({
+  result,
+  error,
+  kind = "s3",
+}: {
+  result: ConnectionResult | null;
+  error: string | null;
+  kind?: StorageKind;
+}) {
   const { t } = useI18n();
+  const s3 = kind === "s3";
   if (error) {
     return (
       <Text size={200} className="text-error">
@@ -18,7 +28,7 @@ export function ConnectionTestResult({ result, error }: { result: ConnectionResu
   }
   if (!result) return null;
   const link = result.publicLink;
-  const hint = publicLinkHint(link, t);
+  const hint = s3 ? publicLinkHint(link, t) : folderLinkHint(link, t);
   return (
     <div className="test-result">
       {result.writable ? (
@@ -27,7 +37,7 @@ export function ConnectionTestResult({ result, error }: { result: ConnectionResu
         </Text>
       ) : (
         <Text size={200} className="text-error">
-          ✕ {t("Upload: failed. This key can read the bucket but can’t write to it.")}
+          ✕ {s3 ? t("Upload: failed. This key can read the bucket but can’t write to it.") : t("Upload: failed. This account can read the folder but can’t write to it.")}
         </Text>
       )}
       {link?.kind === "reachable" && (
@@ -65,4 +75,17 @@ function publicLinkHint(check: PublicLinkCheck | null, t: Translate) {
     return t("The test file was uploaded, but it isn’t at the Public Base URL. Check that the URL points to this bucket.");
   }
   return t("The Public Base URL didn’t serve the test file. Check the domain and that it points to this bucket.");
+}
+
+/** `publicLinkHint` for a WebDAV folder, which has no bucket policy or
+ * temporary links: its public address has to serve it by itself. */
+function folderLinkHint(check: PublicLinkCheck | null, t: Translate) {
+  if (!check || check.kind === "reachable") return null;
+  if (check.kind === "status" && (check.code === 401 || check.code === 403)) {
+    return t("Uploads work, but anyone who opens a link gets an error. The Public Base URL has to serve this folder without signing in.");
+  }
+  if (check.kind === "status" && check.code === 404) {
+    return t("The test file was uploaded, but it isn’t at the Public Base URL. Check that the URL points to this folder.");
+  }
+  return t("The Public Base URL didn’t serve the test file. Check the domain and that it points to this folder.");
 }

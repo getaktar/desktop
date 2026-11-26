@@ -84,6 +84,21 @@ pub fn list_destinations(core: Core) -> Vec<crate::destinations::DestinationView
     core.destinations.all().into_iter().map(Into::into).collect()
 }
 
+/// Every preset with its kind and what it can do, for the destination
+/// form: it shows the fields and controls of the preset being picked.
+#[tauri::command]
+pub fn storage_presets() -> Vec<crate::destinations::PresetInfo> {
+    crate::destinations::preset_infos()
+}
+
+/// What to fill in when a new destination has no credentials yet.
+fn missing_credentials(config: &DestinationConfig) -> String {
+    match config.kind() {
+        crate::destinations::StorageKind::S3 => t!("Enter an Access Key ID and Secret Access Key."),
+        _ => t!("Enter a user name and password."),
+    }
+}
+
 fn filled(credentials: Option<StorageCredentials>) -> Option<StorageCredentials> {
     credentials.filter(|c| !c.access_key_id.trim().is_empty() && !c.secret_access_key.is_empty()).map(|c| {
         StorageCredentials {
@@ -205,7 +220,7 @@ fn store_destination(
     let reconnected = !is_new && !is_saved_connection(core, &config, credentials.as_ref());
     if is_new {
         let Some(credentials) = credentials else {
-            return Err(t!("Enter an Access Key ID and Secret Access Key."));
+            return Err(missing_credentials(&config));
         };
         credentials::save(&credentials, &config.id).map_err(|error| error.to_string())?;
         core.destinations.add(config.clone());
@@ -610,7 +625,7 @@ pub async fn test_connection(
     let credentials = match filled(credentials) {
         Some(credentials) => credentials,
         None if !config.id.is_empty() => credentials::load(&config.id).map_err(|error| error.to_string())?,
-        None => return Err(t!("Enter an Access Key ID and Secret Access Key.")),
+        None => return Err(missing_credentials(&config)),
     };
     let storage = crate::storage::backend(&config, &credentials).map_err(|error| error.to_string())?;
     storage.test_connection().await.map_err(|error| error.to_string())
@@ -628,7 +643,7 @@ fn credentials_for(config: &DestinationConfig, credentials: Option<StorageCreden
     match filled(credentials) {
         Some(credentials) => Ok(credentials),
         None if !config.id.is_empty() => credentials::load(&config.id).map_err(|error| error.to_string()),
-        None => Err(t!("Enter an Access Key ID and Secret Access Key.")),
+        None => Err(missing_credentials(config)),
     }
 }
 

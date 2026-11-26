@@ -316,7 +316,7 @@ pub fn origin_of(url: &str) -> Option<String> {
 /// Where the request page is served from: the public base URL, or, on a
 /// temporary-link destination, the S3 endpoint itself.
 pub fn page_origin(destination: &DestinationConfig) -> Option<String> {
-    if destination.temporary_link.is_some() {
+    if destination.temporary_link_seconds().is_some() {
         return crate::storage::object_origin(destination);
     }
     origin_of(&crate::output::resolve_public_url(&destination.public_base_url, "x"))

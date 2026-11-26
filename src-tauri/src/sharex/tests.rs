@@ -231,6 +231,11 @@ fn picks_presets() {
     assert_eq!(preset_for("s3.amazonaws.com"), ProviderPreset::AmazonS3);
     assert_eq!(preset_for("minio.example.com"), ProviderPreset::CustomS3);
     assert_eq!(preset_for("notamazonaws.com"), ProviderPreset::CustomS3);
+    // ShareX's Amazon S3 uploader is S3 wherever it points, a WebDAV
+    // server's host included.
+    for host in ["cloud.example.com", "u123.your-storagebox.de", "localhost", ""] {
+        assert_eq!(preset_for(host).kind(), crate::destinations::StorageKind::S3, "{host}");
+    }
 }
 
 #[test]

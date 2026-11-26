@@ -20,6 +20,7 @@ import { useEffect, useState } from "react";
 
 import {
   api,
+  canDo,
   errorMessage,
   requestDurations,
   requestSizeLimits,
@@ -53,7 +54,9 @@ function requestError(error: unknown): RequestError {
  * send files straight into a destination's bucket until it expires. */
 export function RequestFilesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useI18n();
-  const [destinations] = useDestinations();
+  // Only destinations whose storage can take file requests (S3).
+  const [allDestinations] = useDestinations();
+  const destinations = allDestinations.filter((destination) => canDo(destination, "fileRequests"));
   const [destinationId, setDestinationId] = useState<string>("");
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");

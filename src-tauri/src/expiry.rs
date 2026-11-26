@@ -263,9 +263,12 @@ pub fn cached(core: &SharedCore, destination_id: &str) -> Option<RulesCheck> {
 }
 
 /// Whether the destination's bucket is known to have the rules, which is
-/// what makes "Delete after" apply to uploads there.
+/// what makes "Delete after" apply to uploads there. Never for a kind of
+/// storage without lifecycle rules, whatever was recorded for it while it
+/// was S3.
 pub fn is_active(core: &SharedCore, destination_id: &str) -> bool {
-    cached(core, destination_id).is_some_and(|check| check.status == RulesStatus::Active)
+    let capable = core.destinations.find(Some(destination_id)).is_none_or(|destination| destination.capabilities().expiry_rules);
+    capable && cached(core, destination_id).is_some_and(|check| check.status == RulesStatus::Active)
 }
 
 /// Records whether a destination's rules are active: a check's result, or

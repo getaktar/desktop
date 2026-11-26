@@ -6,6 +6,7 @@ import {
   DocumentRegular,
   DocumentTextRegular,
   FolderZipRegular,
+  GlobeRegular,
   HardDriveRegular,
   ImageRegular,
   MusicNote2Regular,
@@ -60,6 +61,8 @@ export function ProviderIcon({ preset, size = 20 }: { preset: ProviderPreset; si
       return <DatabaseRegular style={style} />;
     case "customS3":
       return <StorageRegular style={style} />;
+    case "webdav":
+      return <GlobeRegular style={style} />;
   }
 }
 

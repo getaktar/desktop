@@ -1,7 +1,7 @@
 //! The storage a destination's files go to, whatever kind it is
 //! (docs/storage-backends.md in the Mac repo). Callers build one with
 //! `backend` instead of naming a provider, so another kind only adds a
-//! variant here and its own module. S3 is the only one so far.
+//! variant here and its own module: S3 and WebDAV so far.
 //!
 //! An enum rather than a trait object: the methods are async, and a trait
 //! with async methods can't be made into `dyn` without boxing every future.
@@ -9,22 +9,24 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{BucketListing, BucketObject, ConnectionResult, Progress, S3Provider, StorageError, UploadResult};
+use super::{BucketListing, BucketObject, ConnectionResult, Progress, S3Provider, StorageError, UploadResult, WebdavProvider};
 use crate::credentials::StorageCredentials;
 use crate::destinations::{DestinationConfig, StorageKind};
 use crate::output::resolve_public_url;
 
 pub enum Backend {
     S3(S3Provider),
+    Webdav(WebdavProvider),
 }
 
 /// The backend for `config`'s kind of storage. It can't fail for S3 (the
-/// SDK checks the endpoint only when a request goes out), but a kind added
-/// later may refuse settings it can't use before anything is sent.
+/// SDK checks the endpoint only when a request goes out); WebDAV refuses a
+/// server URL it won't send the password to before anything is sent.
 pub fn backend(config: &DestinationConfig, credentials: &StorageCredentials) -> Result<Backend, StorageError> {
     match config.kind() {
         StorageKind::S3 => Ok(Backend::S3(S3Provider::new(config.clone(), credentials.clone()))),
-        StorageKind::Webdav | StorageKind::Sftp => Err(StorageError::Unsupported),
+        StorageKind::Webdav => Ok(Backend::Webdav(WebdavProvider::new(config.clone(), credentials.clone())?)),
+        StorageKind::Sftp => Err(StorageError::Unsupported),
     }
 }
 
@@ -32,6 +34,7 @@ impl Backend {
     pub fn config(&self) -> &DestinationConfig {
         match self {
             Backend::S3(provider) => provider.config(),
+            Backend::Webdav(provider) => provider.config(),
         }
     }
 
@@ -42,6 +45,7 @@ impl Backend {
     pub fn as_s3(&self) -> Option<&S3Provider> {
         match self {
             Backend::S3(provider) => Some(provider),
+            Backend::Webdav(_) => None,
         }
     }
 
@@ -59,6 +63,7 @@ impl Backend {
     pub async fn test_connection(&self) -> Result<ConnectionResult, StorageError> {
         match self {
             Backend::S3(provider) => provider.test_connection().await,
+            Backend::Webdav(provider) => provider.test_connection().await,
         }
     }
 
@@ -75,6 +80,7 @@ impl Backend {
     ) -> Result<UploadResult, StorageError> {
         match self {
             Backend::S3(provider) => provider.upload(path, object_key, content_type, progress, only_if_new).await,
+            Backend::Webdav(provider) => provider.upload(path, object_key, content_type, progress, only_if_new).await,
         }
     }
 
@@ -82,6 +88,7 @@ impl Backend {
     pub async fn put_bytes(&self, object_key: &str, data: Vec<u8>, content_type: &str) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.put_bytes(object_key, data, content_type).await,
+            Backend::Webdav(provider) => provider.put_bytes(object_key, data, content_type).await,
         }
     }
 
@@ -89,6 +96,7 @@ impl Backend {
     pub async fn put_page(&self, object_key: &str, html: String) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.put_page(object_key, html).await,
+            Backend::Webdav(provider) => provider.put_page(object_key, html).await,
         }
     }
 
@@ -96,6 +104,7 @@ impl Backend {
     pub async fn get_small(&self, key: &str, max_bytes: u64) -> Result<Option<(Vec<u8>, Option<i64>)>, StorageError> {
         match self {
             Backend::S3(provider) => provider.get_small(key, max_bytes).await,
+            Backend::Webdav(provider) => provider.get_small(key, max_bytes).await,
         }
     }
 
@@ -103,24 +112,28 @@ impl Backend {
     pub async fn download(&self, key: &str, destination: &Path, max_bytes: u64) -> Result<bool, StorageError> {
         match self {
             Backend::S3(provider) => provider.download(key, destination, max_bytes).await,
+            Backend::Webdav(provider) => provider.download(key, destination, max_bytes).await,
         }
     }
 
     pub async fn delete(&self, object_key: &str) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.delete(object_key).await,
+            Backend::Webdav(provider) => provider.delete(object_key).await,
         }
     }
 
     pub async fn delete_many(&self, keys: &[String]) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.delete_many(keys).await,
+            Backend::Webdav(provider) => provider.delete_many(keys).await,
         }
     }
 
     pub async fn object_exists(&self, key: &str) -> Result<bool, StorageError> {
         match self {
             Backend::S3(provider) => provider.object_exists(key).await,
+            Backend::Webdav(provider) => provider.object_exists(key).await,
         }
     }
 
@@ -128,6 +141,7 @@ impl Backend {
     pub async fn object_info(&self, key: &str) -> Result<Option<BucketObject>, StorageError> {
         match self {
             Backend::S3(provider) => provider.object_info(key).await,
+            Backend::Webdav(provider) => provider.object_info(key).await,
         }
     }
 
@@ -147,6 +161,7 @@ impl Backend {
     pub async fn list(&self, prefix: &str, continuation_token: Option<String>) -> Result<BucketListing, StorageError> {
         match self {
             Backend::S3(provider) => provider.list(prefix, continuation_token).await,
+            Backend::Webdav(provider) => provider.list(prefix, continuation_token).await,
         }
     }
 
@@ -154,18 +169,21 @@ impl Backend {
     pub async fn list_recursively(&self, prefix: &str, continuation_token: Option<String>) -> Result<BucketListing, StorageError> {
         match self {
             Backend::S3(provider) => provider.list_recursively(prefix, continuation_token).await,
+            Backend::Webdav(provider) => provider.list_recursively(prefix, continuation_token).await,
         }
     }
 
     pub async fn copy(&self, source_key: &str, destination_key: &str) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.copy(source_key, destination_key).await,
+            Backend::Webdav(provider) => provider.copy(source_key, destination_key).await,
         }
     }
 
     pub async fn create_folder(&self, prefix: &str) -> Result<(), StorageError> {
         match self {
             Backend::S3(provider) => provider.create_folder(prefix).await,
+            Backend::Webdav(provider) => provider.create_folder(prefix).await,
         }
     }
 

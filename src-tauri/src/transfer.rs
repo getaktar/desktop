@@ -14,6 +14,12 @@
 //! link was made); a link more than five minutes past it is refused, and
 //! one without it (from older apps) is taken.
 //!
+//! The first byte, and `v` in the JSON, is the format version: 1 for an S3
+//! destination, 2 for any other kind (docs/storage-backends.md in the Mac
+//! repo), so an app that only knows S3 says it needs a newer version
+//! instead of importing a destination it can't use. Version 2 is otherwise
+//! the same, additional data included, and both are read here.
+//!
 //! Deriving the key takes a moment on purpose, so `seal` and `open` run
 //! off the async runtime's threads. Nothing here is ever logged.
 
@@ -27,12 +33,15 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::credentials::StorageCredentials;
-use crate::destinations::{DestinationConfig, ImageProcessing, ProviderPreset};
+use crate::destinations::{DestinationConfig, ImageProcessing, ProviderPreset, StorageKind};
 use crate::output::OutputMode;
 use crate::watched::model::{Hook, HookKind};
 
 pub const LINK_PREFIX: &str = "aktar://import#";
+/// What S3 destinations are sent with, which every version reads.
 const FORMAT_VERSION: u8 = 1;
+/// What other kinds (WebDAV) are sent with, and the newest read here.
+const NEWEST_FORMAT_VERSION: u8 = 2;
 /// Crockford base32, which leaves out I, L, O and U.
 const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_LENGTH: usize = 12;
@@ -123,19 +132,27 @@ pub fn seal(payload: &TransferPayload, code: &str) -> Result<String, String> {
     let mut nonce = [0u8; NONCE_LENGTH];
     rand::rngs::OsRng.fill_bytes(&mut salt);
     rand::rngs::OsRng.fill_bytes(&mut nonce);
-    seal_with(&encode_payload(payload, now_seconds()), code, &salt, &nonce)
+    seal_with(&encode_payload(payload, now_seconds()), format_version(&payload.destination), code, &salt, &nonce)
+}
+
+/// 1 for S3, which older versions import, 2 for a kind they can't use.
+fn format_version(destination: &DestinationConfig) -> u8 {
+    match destination.kind() {
+        StorageKind::S3 => FORMAT_VERSION,
+        StorageKind::Webdav | StorageKind::Sftp => NEWEST_FORMAT_VERSION,
+    }
 }
 
 fn now_seconds() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-fn seal_with(plaintext: &[u8], code: &str, salt: &[u8; SALT_LENGTH], nonce: &[u8; NONCE_LENGTH]) -> Result<String, String> {
+fn seal_with(plaintext: &[u8], version: u8, code: &str, salt: &[u8; SALT_LENGTH], nonce: &[u8; NONCE_LENGTH]) -> Result<String, String> {
     let sealed = cipher(code, salt)
         .encrypt(&Nonce::from(*nonce), AeadPayload { msg: plaintext, aad: ADDITIONAL_DATA })
         .map_err(|error| error.to_string())?;
     let mut envelope = Vec::with_capacity(HEADER_LENGTH + sealed.len());
-    envelope.push(FORMAT_VERSION);
+    envelope.push(version);
     envelope.extend_from_slice(salt);
     envelope.extend_from_slice(nonce);
     envelope.extend_from_slice(&sealed);
@@ -170,8 +187,8 @@ pub fn envelope(input: &str) -> Result<Vec<u8>, TransferError> {
         return Err(TransferError::NotTransfer);
     }
     match data[0] {
-        FORMAT_VERSION => Ok(data),
-        version if version > FORMAT_VERSION => Err(TransferError::NewerVersion),
+        FORMAT_VERSION..=NEWEST_FORMAT_VERSION => Ok(data),
+        version if version > NEWEST_FORMAT_VERSION => Err(TransferError::NewerVersion),
         _ => Err(TransferError::NotTransfer),
     }
 }
@@ -219,7 +236,7 @@ fn encode_payload(payload: &TransferPayload, now: i64) -> Vec<u8> {
         }
     }
     let mut root = json!({
-        "v": FORMAT_VERSION,
+        "v": format_version(&payload.destination),
         "destination": destination,
         "credentials": credentials,
         "expiresAt": now + LIFETIME_SECONDS,
@@ -243,14 +260,15 @@ fn remove_nulls(object: &mut Map<String, Value>) {
 
 /// Lenient: unknown fields are ignored, and an optional field with a value
 /// this app doesn't know is left unset rather than failing the whole
-/// import. Only what a destination can't work without is required. Text
+/// import. Only what a destination can't work without is required (a
+/// bucket only for S3). Text
 /// fields are trimmed, as the destination form does, since the import
 /// saves them as they come. A link past its `expiresAt` (by more than the
 /// clock skew allowed) is refused; one without it, from an app before it,
 /// is taken.
 fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferError> {
     let root: Value = serde_json::from_slice(data).map_err(|_| TransferError::NotTransfer)?;
-    if integer(root.get("v")).is_some_and(|version| version > FORMAT_VERSION as i64) {
+    if integer(root.get("v")).is_some_and(|version| version > NEWEST_FORMAT_VERSION as i64) {
         return Err(TransferError::NewerVersion);
     }
     if integer(root.get("expiresAt")).is_some_and(|expires_at| now > expires_at.saturating_add(CLOCK_SKEW_SECONDS)) {
@@ -262,6 +280,7 @@ fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferErro
 
     let id = uuid::Uuid::parse_str(&required(object, "id")?).map_err(|_| TransferError::NotTransfer)?;
     let preset: ProviderPreset = serde_json::from_value(Value::String(required(object, "preset")?)).map_err(|_| TransferError::NotTransfer)?;
+    let s3 = preset.kind() == StorageKind::S3;
     let mut destination = DestinationConfig {
         id: id.hyphenated().to_string().to_uppercase(),
         name: required(object, "name")?,
@@ -269,10 +288,10 @@ fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferErro
         account_id: trimmed(object.get("accountID")),
         endpoint: required(object, "endpoint")?,
         region: trimmed(object.get("region")).unwrap_or_else(|| default_region(preset).into()),
-        bucket: required(object, "bucket")?,
+        bucket: if s3 { required(object, "bucket")? } else { String::new() },
         public_base_url: required(object, "publicBaseURL")?,
         object_path_template: trimmed(object.get("objectPathTemplate")).unwrap_or_else(|| DEFAULT_OBJECT_PATH.into()),
-        force_path_style: object.get("forcePathStyle").and_then(Value::as_bool).unwrap_or(preset == ProviderPreset::MinIO),
+        force_path_style: s3 && object.get("forcePathStyle").and_then(Value::as_bool).unwrap_or(preset == ProviderPreset::MinIO),
         is_default: false,
         output_mode: known(object.get("outputMode")),
         expiry_days: integer(object.get("expiryDays")).and_then(|days| u32::try_from(days).ok()),
@@ -334,10 +353,12 @@ fn hooks(value: Option<&Value>) -> Option<Vec<Hook>> {
     (!hooks.is_empty()).then_some(hooks)
 }
 
-/// The region a provider's form starts with, as in the Mac app.
+/// The region a provider's form starts with, as in the Mac app; none for
+/// a kind without regions.
 fn default_region(preset: ProviderPreset) -> &'static str {
     match preset {
         ProviderPreset::AmazonS3 => "us-east-1",
+        ProviderPreset::Webdav => "",
         _ => "auto",
     }
 }
@@ -438,9 +459,16 @@ mod tests {
     fn reports_why_a_link_fails() {
         assert_eq!(open(FULL, "K7P2QX9M4TRX").unwrap_err(), TransferError::WrongCode);
         assert_eq!(open(FULL, "K7P2-QX9M").unwrap_err(), TransferError::WrongCode);
-        assert_eq!(envelope(NEWER_VERSION).unwrap_err(), TransferError::NewerVersion);
-        assert_eq!(open(NEWER_VERSION, CODE).unwrap_err(), TransferError::NewerVersion);
-        assert_eq!(open(NEWER_PAYLOAD, CODE).unwrap_err(), TransferError::NewerVersion);
+        // The shared vector for a newer format has 2 as its first byte,
+        // which is format 2 now (other kinds of storage): it opens. 3 is
+        // still newer.
+        assert!(open(NEWER_VERSION, CODE).is_ok());
+        let mut three = envelope(NEWER_VERSION).unwrap();
+        three[0] = 3;
+        assert_eq!(envelope(&BASE64URL.encode(&three)).unwrap_err(), TransferError::NewerVersion);
+        // Its payload with "v": 2 too; a "v" of 3 is turned down
+        // (`reads_version_two_and_turns_down_three`).
+        assert!(open(NEWER_PAYLOAD, CODE).is_ok());
         for input in ["https://example.com", "aktar://import#", "aktar://import#AAAA", "hello", "", "aktar://other#AQAB"] {
             assert_eq!(envelope(input).unwrap_err(), TransferError::NotTransfer, "{input}");
         }
@@ -454,7 +482,7 @@ mod tests {
     fn expires_after_an_hour() {
         let payload = open(FULL, CODE).unwrap();
         let created = 1_790_000_000;
-        let sealed = seal_with(&encode_payload(&payload, created), CODE, &[7; SALT_LENGTH], &[9; NONCE_LENGTH]).unwrap();
+        let sealed = seal_with(&encode_payload(&payload, created), 1, CODE, &[7; SALT_LENGTH], &[9; NONCE_LENGTH]).unwrap();
         let plaintext = |link: &str| {
             let envelope = envelope(link).unwrap();
             let nonce: [u8; NONCE_LENGTH] = envelope[1 + SALT_LENGTH..HEADER_LENGTH].try_into().unwrap();
@@ -761,5 +789,104 @@ mod tests {
         plain.destination.output_mode = None;
         let json: Value = serde_json::from_slice(&encode_payload(&plain, 1_000)).unwrap();
         assert!(json.get("customTemplate").is_none());
+    }
+
+    fn webdav_payload() -> TransferPayload {
+        let mut destination = open(FULL, CODE).unwrap().destination;
+        destination.preset = ProviderPreset::Webdav;
+        destination.account_id = None;
+        destination.endpoint = "https://cloud.example.com/remote.php/dav/files/me/aktar".into();
+        destination.public_base_url = "https://files.example.com".into();
+        destination.sanitize();
+        TransferPayload {
+            destination,
+            credentials: StorageCredentials {
+                access_key_id: "me".into(),
+                secret_access_key: "app password".into(),
+                session_token: None,
+                cloudflare_token: None,
+                short_link_token: None,
+            },
+            custom_template: None,
+        }
+    }
+
+    #[test]
+    fn webdav_travels_as_version_two() {
+        let payload = webdav_payload();
+        assert_eq!((payload.destination.bucket.as_str(), payload.destination.region.as_str()), ("", ""));
+        let json: Value = serde_json::from_slice(&encode_payload(&payload, 1_000)).unwrap();
+        assert_eq!(json["v"], 2);
+        assert_eq!(json["destination"]["preset"], "webdav");
+        assert_eq!(json["destination"]["bucket"], "");
+        assert_eq!(json["destination"]["region"], "");
+        assert_eq!(json["destination"]["forcePathStyle"], false);
+        assert_eq!(json["credentials"]["accessKeyId"], "me");
+
+        let link = seal(&payload, CODE).unwrap();
+        let envelope = envelope(&link).unwrap();
+        assert_eq!(envelope[0], 2);
+        let opened = open(&link, CODE).unwrap();
+        assert_eq!(opened.destination, DestinationConfig { is_default: false, ..payload.destination.clone() });
+        assert_eq!(opened.destination.kind(), StorageKind::Webdav);
+        assert_eq!(opened.credentials.access_key_id, "me");
+        assert_eq!(opened.credentials.secret_access_key, "app password");
+
+        // The S3-only settings it carried (a temporary link, Delete after)
+        // come along but aren't used.
+        assert_eq!(opened.destination.temporary_link_seconds(), None);
+    }
+
+    #[test]
+    fn s3_stays_version_one() {
+        let payload = open(FULL, CODE).unwrap();
+        let json: Value = serde_json::from_slice(&encode_payload(&payload, 1_000)).unwrap();
+        assert_eq!(json["v"], 1);
+        let link = seal(&payload, CODE).unwrap();
+        assert_eq!(envelope(&link).unwrap()[0], 1);
+        assert_eq!(open(&link, CODE).unwrap().destination.preset, ProviderPreset::CloudflareR2);
+    }
+
+    #[test]
+    fn reads_version_two_and_turns_down_three() {
+        let decoded = |version: i64, destination: Value| {
+            let data = serde_json::to_vec(&json!({
+                "v": version,
+                "destination": destination,
+                "credentials": { "accessKeyId": "me", "secretAccessKey": "secret" },
+            }))
+            .unwrap();
+            decode_payload(&data, 0)
+        };
+        let webdav = json!({
+            "id": "0F0E8A57-4D8C-4C61-9B26-7C3F7E0E9A11", "name": "Cloud", "preset": "webdav",
+            "endpoint": "https://cloud.example.com/dav", "bucket": "", "region": "", "publicBaseURL": "https://files.example.com",
+        });
+        let destination = decoded(2, webdav.clone()).unwrap().destination;
+        assert_eq!(destination.preset, ProviderPreset::Webdav);
+        assert_eq!((destination.bucket.as_str(), destination.region.as_str(), destination.force_path_style), ("", "", false));
+        // Without the empty fields at all.
+        let mut bare = webdav.clone();
+        bare.as_object_mut().unwrap().remove("bucket");
+        bare.as_object_mut().unwrap().remove("region");
+        assert!(decoded(2, bare.clone()).is_ok());
+        // An S3 destination in version 2 is fine too, but still needs its bucket.
+        let s3 = json!({
+            "id": "0F0E8A57-4D8C-4C61-9B26-7C3F7E0E9A11", "name": "A", "preset": "customS3",
+            "endpoint": "https://s3.example.com", "bucket": "b", "publicBaseURL": "https://files.example.com",
+        });
+        assert_eq!(decoded(2, s3.clone()).unwrap().destination.bucket, "b");
+        let mut no_bucket = s3;
+        no_bucket["bucket"] = "".into();
+        assert_eq!(decoded(2, no_bucket).unwrap_err(), TransferError::NotTransfer);
+        assert_eq!(decoded(3, webdav).unwrap_err(), TransferError::NewerVersion);
+
+        // The envelope: 2 opens, 3 needs a newer version.
+        let payload = webdav_payload();
+        let sealed = seal_with(&encode_payload(&payload, now_seconds()), 2, CODE, &[1; SALT_LENGTH], &[2; NONCE_LENGTH]).unwrap();
+        assert!(open(&sealed, CODE).is_ok());
+        let mut three = envelope(&sealed).unwrap();
+        three[0] = 3;
+        assert_eq!(envelope(&BASE64URL.encode(three)).unwrap_err(), TransferError::NewerVersion);
     }
 }

@@ -135,6 +135,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::list_destinations,
+            commands::storage_presets,
             commands::save_destination,
             commands::has_cloudflare_token,
             commands::saved_short_link_provider,

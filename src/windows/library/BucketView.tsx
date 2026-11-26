@@ -40,7 +40,7 @@ import {
 } from "../../components/Dialogs";
 import { ObjectThumbnail, ProviderIcon, useObjectThumbnail } from "../../components/FileVisuals";
 import { Preview } from "../../components/Preview";
-import { api, errorMessage, temporaryLinkDurations, type BucketObject, type DestinationConfig } from "../../lib/api";
+import { api, canDo, errorMessage, temporaryLinkDurations, type BucketObject, type DestinationConfig } from "../../lib/api";
 import {
   folderDisplayName,
   formatBytes,
@@ -49,6 +49,7 @@ import {
   nameOfKey,
   parentOfFolder,
   parentOfKey,
+  storageLocation,
   temporaryLinkTitle,
 } from "../../lib/format";
 import { hasTextSelection, useFlag, useSelection } from "../../lib/hooks";
@@ -71,18 +72,23 @@ function objectMenu(
     { label: t("Copy URL"), onClick: () => api.copyText(url) },
     { label: t("Copy Markdown"), onClick: () => api.copyText(formatOutput(url, "markdown", name)) },
     { label: t("Copy HTML"), onClick: () => api.copyText(formatOutput(url, "html", name)) },
-    {
-      submenu: t("Copy Temporary Link"),
-      items: temporaryLinkDurations.map((seconds) => ({
-        label: temporaryLinkTitle(seconds, t),
-        onClick: () => {
-          model
-            .temporaryURL(object.key, seconds)
-            .then((link) => api.copyText(link))
-            .catch((error) => model.setActionError(String(error)));
-        },
-      })),
-    },
+    // Only where the storage makes them (not WebDAV).
+    ...(canDo(model.destination, "temporaryLinks")
+      ? [
+          {
+            submenu: t("Copy Temporary Link"),
+            items: temporaryLinkDurations.map((seconds) => ({
+              label: temporaryLinkTitle(seconds, t),
+              onClick: () => {
+                model
+                  .temporaryURL(object.key, seconds)
+                  .then((link) => api.copyText(link))
+                  .catch((error) => model.setActionError(String(error)));
+              },
+            })),
+          },
+        ]
+      : []),
     { label: t("Copy Object Key"), onClick: () => api.copyText(object.key) },
     "divider",
     { label: t("Open in Browser"), onClick: () => api.openUrl(url) },
@@ -186,9 +192,9 @@ export function BucketView({
   })();
 
   const scopeName =
-    model.searchScope === "folder" && model.prefix ? `“${folderDisplayName(model.prefix)}”` : destination.bucket;
+    model.searchScope === "folder" && model.prefix ? `“${folderDisplayName(model.prefix)}”` : storageLocation(destination);
 
-  const location = (parent: string) => (parent ? parent.slice(0, -1) : destination.bucket);
+  const location = (parent: string) => (parent ? parent.slice(0, -1) : storageLocation(destination));
 
   const list = (
     <div className="list" role="listbox" aria-multiselectable>
@@ -587,7 +593,7 @@ function BucketObjectDetail({
             {name}
           </Text>
           <Text className="secondary ellipsis">
-            {model.destination.bucket}/{parentOfKey(object.key)}
+            {storageLocation(model.destination)}/{parentOfKey(object.key)}
           </Text>
         </header>
         <Preview url={previewURL} filename={name} browserURL={url} placeholder={thumbnail} size={object.size} />

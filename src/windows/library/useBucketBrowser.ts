@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, errorMessage, events, type BucketObject, type DestinationConfig, type UploadSucceeded } from "../../lib/api";
+import { api, canDo, errorMessage, events, type BucketObject, type DestinationConfig, type UploadSucceeded } from "../../lib/api";
 import { folderDisplayName, nameOfKey, parentOfFolder, parentOfKey, resolvePublicUrl } from "../../lib/format";
 import { useTauriEvent } from "../../lib/hooks";
 import { useI18n } from "../../lib/i18n";
@@ -271,9 +271,12 @@ export function useBucketBrowser(destination: DestinationConfig) {
   const temporaryURL = useCallback((key: string, seconds: number) => api.bucketPresign(id, key, seconds), [id]);
 
   /** Previews use presigned links (cached for most of their hour), so they
-   * work for private buckets and misconfigured public base URLs alike. */
+   * work for private buckets and misconfigured public base URLs alike.
+   * Storage without temporary links (WebDAV) previews the public URL. */
+  const signsLinks = canDo(destination, "temporaryLinks");
   const previewURL = useCallback(
     async (key: string) => {
+      if (!signsLinks) return resolvePublicUrl(destination.publicBaseURL, key);
       const cached = previewURLs.current.get(key);
       if (cached && cached.expires > Date.now()) return cached.url;
       try {
@@ -284,7 +287,7 @@ export function useBucketBrowser(destination: DestinationConfig) {
         return null;
       }
     },
-    [id],
+    [id, signsLinks, destination.publicBaseURL],
   );
 
   // MARK: Actions

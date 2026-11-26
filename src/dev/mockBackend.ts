@@ -376,6 +376,20 @@ export function installMockBackend(route: string) {
         // A new array, as from Rust, so a change shows up in React state.
         case "list_destinations":
           return [...destinations];
+        case "storage_presets":
+          return (["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav"] as const).map((preset) => {
+            const s3 = preset !== "webdav";
+            return {
+              preset,
+              kind: s3 ? "s3" : "webdav",
+              capabilities: {
+                upload: true, delete: true, exists: true, publicURL: true, list: true, copy: true,
+                conditionalWrites: preset === "amazonS3" || preset === "cloudflareR2",
+                multipart: s3, temporaryLinks: s3, expiryRules: s3, fileRequests: s3,
+                bucketThumbnails: true, sharePages: true, cloudflareSetup: preset === "cloudflareR2",
+              },
+            };
+          });
         case "list_jobs":
           return jobs;
         case "list_history":

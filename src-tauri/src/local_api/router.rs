@@ -329,7 +329,7 @@ async fn upload_body(core: &SharedCore, request: &Request) -> Response {
     let Some(destination) = destination else {
         return Response::error(404, "No destination to upload to. Add one in Aktar's Settings.");
     };
-    let expiry = match expiry_from(request, crate::expiry::is_active(core, &destination.id)) {
+    let expiry = match expiry_from(request, &destination, crate::expiry::is_active(core, &destination.id)) {
         Ok(expiry) => expiry,
         Err(response) => return response,
     };
@@ -425,7 +425,7 @@ async fn upload_clipboard(core: &SharedCore, request: &Request) -> Response {
         input.remove_if_temporary();
         return Response::error(404, "No destination to upload to. Add one in Aktar's Settings.");
     };
-    let expiry = match expiry_from(request, crate::expiry::is_active(core, &destination.id)) {
+    let expiry = match expiry_from(request, &destination, crate::expiry::is_active(core, &destination.id)) {
         Ok(expiry) => expiry,
         Err(response) => {
             input.remove_if_temporary();
@@ -536,12 +536,15 @@ const EXPIRY_NOT_SET_UP: &str =
 /// The `expires` query parameter: days until the upload is deleted. Only
 /// accepted for a destination whose lifecycle rules are active, since those
 /// are what deletes the file.
-fn expiry_from(request: &Request, rules_active: bool) -> Result<Expiry, Response> {
+fn expiry_from(request: &Request, destination: &DestinationConfig, rules_active: bool) -> Result<Expiry, Response> {
     let Some(raw) = request.query.get("expires").map(|value| value.trim()).filter(|value| !value.is_empty()) else {
         return Ok(Expiry::Never);
     };
     match raw.parse::<u32>() {
         Ok(0) => Ok(Expiry::Never),
+        Ok(days) if crate::expiry::is_valid(days) && !destination.capabilities().expiry_rules => {
+            Err(Response::error(409, "This destination can't delete uploads after a while (its storage has no lifecycle rules)."))
+        }
         Ok(days) if crate::expiry::is_valid(days) && rules_active => Ok(Expiry::Days(days)),
         Ok(days) if crate::expiry::is_valid(days) => Err(Response::error(409, EXPIRY_NOT_SET_UP)),
         _ => Err(Response::error(400, "The expires parameter must be 0, 1, 7, 14, or 30 (days).")),
@@ -903,6 +906,8 @@ struct DestinationDto {
     id: String,
     name: String,
     provider: &'static str,
+    /// The kind of storage (`s3`, `webdav`), told by `provider`.
+    kind: crate::destinations::StorageKind,
     provider_name: String,
     bucket: String,
     #[serde(rename = "publicBaseURL")]
@@ -922,6 +927,7 @@ fn destination_dto(core: &SharedCore, destination: &DestinationConfig) -> Destin
         id: destination.id.clone(),
         name: destination.name.clone(),
         provider: destination.preset.raw_value(),
+        kind: destination.kind(),
         provider_name: destination.preset.display_name(),
         bucket: destination.bucket.clone(),
         public_base_url: destination.public_base_url.clone(),
@@ -1094,19 +1100,65 @@ mod tests {
 
     #[test]
     fn reads_expires() {
-        assert_eq!(expiry_from(&request(None), false).ok(), Some(Expiry::Never));
-        assert_eq!(expiry_from(&request(Some("")), false).ok(), Some(Expiry::Never));
-        assert_eq!(expiry_from(&request(Some("0")), false).ok(), Some(Expiry::Never));
-        assert_eq!(expiry_from(&request(Some("7")), true).ok(), Some(Expiry::Days(7)));
-        assert_eq!(expiry_from(&request(Some(" 30 ")), true).ok(), Some(Expiry::Days(30)));
-        assert_eq!(error(expiry_from(&request(Some("3")), true)).0, 400);
-        assert_eq!(error(expiry_from(&request(Some("soon")), false)).0, 400);
+        assert_eq!(expiry_from(&request(None), &s3(), false).ok(), Some(Expiry::Never));
+        assert_eq!(expiry_from(&request(Some("")), &s3(), false).ok(), Some(Expiry::Never));
+        assert_eq!(expiry_from(&request(Some("0")), &s3(), false).ok(), Some(Expiry::Never));
+        assert_eq!(expiry_from(&request(Some("7")), &s3(), true).ok(), Some(Expiry::Days(7)));
+        assert_eq!(expiry_from(&request(Some(" 30 ")), &s3(), true).ok(), Some(Expiry::Days(30)));
+        assert_eq!(error(expiry_from(&request(Some("3")), &s3(), true)).0, 400);
+        assert_eq!(error(expiry_from(&request(Some("soon")), &s3(), false)).0, 400);
     }
 
     #[test]
     fn refuses_expires_without_rules() {
-        let (status, message) = error(expiry_from(&request(Some("7")), false));
+        let (status, message) = error(expiry_from(&request(Some("7")), &s3(), false));
         assert_eq!(status, 409);
         assert_eq!(message, EXPIRY_NOT_SET_UP);
+    }
+
+    fn destination(preset: &str) -> DestinationConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "A", "name": "N", "preset": preset, "endpoint": "https://e.example.com", "region": "", "bucket": "b",
+            "publicBaseURL": "https://p.example.com", "objectPathTemplate": "{uuid}.{ext}", "forcePathStyle": false,
+        }))
+        .unwrap()
+    }
+
+    fn s3() -> DestinationConfig {
+        destination("minIO")
+    }
+
+    #[test]
+    fn refuses_expires_where_the_storage_cannot() {
+        let webdav = destination("webdav");
+        let (status, message) = error(expiry_from(&request(Some("7")), &webdav, true));
+        assert_eq!(status, 409);
+        assert!(message.contains("lifecycle rules"), "{message}");
+        assert_eq!(expiry_from(&request(Some("0")), &webdav, false).ok(), Some(Expiry::Never));
+    }
+
+    #[test]
+    fn destinations_say_their_kind() {
+        let dto = |destination: &DestinationConfig| {
+            serde_json::to_value(DestinationDto {
+                id: destination.id.clone(),
+                name: destination.name.clone(),
+                provider: destination.preset.raw_value(),
+                kind: destination.kind(),
+                provider_name: destination.preset.display_name(),
+                bucket: destination.bucket.clone(),
+                public_base_url: destination.public_base_url.clone(),
+                is_default: false,
+                use_for: None,
+                short_cache: false,
+                has_cloudflare_purge: false,
+                hooks: 0,
+            })
+            .unwrap()
+        };
+        let s3 = dto(&s3());
+        assert_eq!((s3["provider"].as_str(), s3["kind"].as_str()), (Some("minIO"), Some("s3")));
+        let webdav = dto(&destination("webdav"));
+        assert_eq!((webdav["provider"].as_str(), webdav["kind"].as_str(), webdav["providerName"].as_str()), (Some("webdav"), Some("webdav"), Some("WebDAV")));
     }
 }

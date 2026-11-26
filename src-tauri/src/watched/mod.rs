@@ -273,7 +273,10 @@ fn destination_for(core: &SharedCore, folder: &WatchedFolder) -> Option<Destinat
     match folder.temporary_link {
         None => {}
         Some(LinkOverride::Public) => destination.temporary_link = None,
-        Some(LinkOverride::Temporary(seconds)) => destination.temporary_link = Some(seconds),
+        // Only where the destination can make temporary links at all.
+        Some(LinkOverride::Temporary(seconds)) => {
+            destination.temporary_link = destination.capabilities().temporary_links.then_some(seconds)
+        }
     }
     Some(destination)
 }

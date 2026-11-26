@@ -12,7 +12,7 @@ import {
 import { CheckmarkRegular, CopyRegular, SaveRegular } from "@fluentui/react-icons";
 import { useEffect, useState } from "react";
 
-import { api, errorMessage, type DestinationConfig, type QrMatrix, type UploadRecord } from "../lib/api";
+import { api, canDo, errorMessage, type DestinationConfig, type QrMatrix, type UploadRecord } from "../lib/api";
 import { recordLink, splitExtension } from "../lib/format";
 import { useFlag } from "../lib/hooks";
 import { useI18n } from "../lib/i18n";
@@ -26,7 +26,7 @@ async function linkFor(record: UploadRecord, destinations: DestinationConfig[]) 
   if (record.shareUrl) return recordLink(record);
   if (record.shortUrl) return record.shortUrl;
   const destination = destinations.find((candidate) => candidate.id === record.destinationId);
-  if (destination?.temporaryLink) {
+  if (destination?.temporaryLink && canDo(destination, "temporaryLinks")) {
     try {
       return await api.recordTemporaryLink(record.id, destination.temporaryLink);
     } catch {

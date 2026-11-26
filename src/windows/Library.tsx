@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ProviderIcon } from "../components/FileVisuals";
 import { api, type DestinationConfig } from "../lib/api";
+import { storageLocation } from "../lib/format";
 import { useDestinations } from "../lib/hooks";
 import { useI18n } from "../lib/i18n";
 import { BucketView } from "./library/BucketView";
@@ -119,7 +120,7 @@ export default function Library() {
           <button
             type="button"
             key={destination.id}
-            title={destination.bucket}
+            title={storageLocation(destination)}
             className={`source ${source.kind === "bucket" && source.id === destination.id ? "source-selected" : ""}`}
             onClick={() => openBucket(destination.id)}
           >

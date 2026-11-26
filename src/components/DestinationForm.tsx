@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   errorMessage,
+  kindOfPreset,
   expiryDurations,
   fileKinds,
   folderUploadModes,
@@ -51,6 +52,8 @@ import {
   type ImageProcessing,
   type OutputMode,
   type ProviderPreset,
+  type StorageCapabilities,
+  type StorageKind,
   type ThumbnailMode,
   type WatchHook,
 } from "../lib/api";
@@ -66,7 +69,7 @@ import {
   temporaryLinkLabel,
   usesShortCode,
 } from "../lib/format";
-import { useSettings, useShortLinkProviders } from "../lib/hooks";
+import { usePresetInfos, useSettings, useShortLinkProviders } from "../lib/hooks";
 import { formProblem, formSettings, shortLinkFormState, type ShortLinkFormState } from "../lib/shortLinks";
 import { useI18n, type Translate } from "../lib/i18n";
 import { defaultThumbnailPrefix, normalizedThumbnailPrefix, thumbnailPrefixProblem } from "../lib/thumbnails";
@@ -77,9 +80,49 @@ import { ShortcutRecorder } from "./ShortcutRecorder";
 import { ShortLinksFormSection } from "./ShortLinksFormSection";
 import { isLinux } from "../lib/platform";
 
-const presets: ProviderPreset[] = ["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3"];
+/** Offered until `storage_presets` answers, in the same order. */
+const fallbackPresets: ProviderPreset[] = ["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav"];
 
-const defaultRegion = (preset: ProviderPreset) => (preset === "amazonS3" ? "us-east-1" : "auto");
+const defaultRegion = (preset: ProviderPreset) => (preset === "amazonS3" ? "us-east-1" : kindOfPreset(preset) === "s3" ? "auto" : "");
+
+/** What an S3 destination can do, for the moment before `storage_presets`
+ * answers; WebDAV's are then the same minus S3's own. */
+function fallbackCapabilities(preset: ProviderPreset): StorageCapabilities {
+  const s3 = kindOfPreset(preset) === "s3";
+  return {
+    upload: true,
+    delete: true,
+    exists: true,
+    publicURL: true,
+    list: true,
+    copy: true,
+    conditionalWrites: preset === "amazonS3" || preset === "cloudflareR2",
+    multipart: s3,
+    temporaryLinks: s3,
+    expiryRules: s3,
+    fileRequests: s3,
+    bucketThumbnails: true,
+    sharePages: true,
+    cloudflareSetup: preset === "cloudflareR2",
+  };
+}
+
+/** Why a WebDAV server URL can't be used, or null: it needs https, except
+ * on this computer (docs/storage-backends.md). */
+export function serverURLProblem(raw: string, t: Translate): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  try {
+    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+    if (url.protocol === "https:") return null;
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname.toLowerCase());
+    if (url.protocol === "http:" && local) return null;
+    if (url.protocol === "http:") return t("The Server URL has to start with https://. Only localhost can use http://.");
+  } catch {
+    // Reported below.
+  }
+  return t("Enter the folder’s full address, such as https://cloud.example.com/remote.php/dav/files/me/aktar.");
+}
 
 /** MinIO deployments commonly run without DNS-based virtual-hosted buckets. */
 const defaultForcePathStyle = (preset: ProviderPreset) => preset === "minIO";
@@ -118,7 +161,15 @@ interface Props {
 
 export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
   const { t, locale } = useI18n();
+  const presetInfos = usePresetInfos();
   const [preset, setPreset] = useState<ProviderPreset>("cloudflareR2");
+  const presetInfo = presetInfos.find((info) => info.preset === preset);
+  /** The kind and capabilities of the preset being picked: the fields and
+   * controls follow them, not the saved destination. */
+  const kind: StorageKind = presetInfo?.kind ?? kindOfPreset(preset);
+  const capabilities = presetInfo?.capabilities ?? fallbackCapabilities(preset);
+  const isS3 = kind === "s3";
+  const presets = presetInfos.length > 0 ? presetInfos.map((info) => info.preset) : fallbackPresets;
   const [name, setName] = useState("");
   const [accountID, setAccountID] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -251,7 +302,10 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
   const cleanURLSuggestionHost =
     cleanURLSuggestionDismissed || usesShortCode(objectPathTemplate) ? null : ownDomainHost(publicBaseURL, endpoint);
   const hasNewCredentials = accessKeyId.trim() !== "" && secretAccessKey !== "";
-  const canTest = endpoint.trim() !== "" && bucket.trim() !== "" && (hasNewCredentials || existing !== null);
+  const endpointProblem = kind === "webdav" ? serverURLProblem(endpoint, t) : null;
+  /** Only S3 has buckets. */
+  const hasBucket = !isS3 || bucket.trim() !== "";
+  const canTest = endpoint.trim() !== "" && endpointProblem === null && hasBucket && (hasNewCredentials || existing !== null);
   const prefixProblem = thumbnailMode === "bucket" ? thumbnailPrefixProblem(thumbnailPrefix, t) : null;
   const invalidExtensions = parseExtensions(useForExtensions).invalid;
   const extensionsProblem =
@@ -268,8 +322,9 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     extensionsProblem === null &&
     zoneProblem === null &&
     !shortLinksProblem &&
-    bucket.trim() !== "" &&
+    hasBucket &&
     endpoint.trim() !== "" &&
+    endpointProblem === null &&
     publicBaseURL.trim() !== "" &&
     prefixProblem === null &&
     (existing !== null || hasNewCredentials);
@@ -280,11 +335,12 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     preset,
     accountID: preset === "cloudflareR2" ? accountID.trim() : null,
     endpoint: endpoint.trim(),
-    region: region.trim(),
-    bucket: bucket.trim(),
+    // WebDAV keeps these fields, empty.
+    region: isS3 ? region.trim() : "",
+    bucket: isS3 ? bucket.trim() : "",
     publicBaseURL: publicBaseURL.trim(),
     objectPathTemplate: objectPathTemplate.trim() || defaultObjectPathTemplate,
-    forcePathStyle,
+    forcePathStyle: isS3 && forcePathStyle,
     isDefault: existing?.isDefault ?? false,
     outputMode,
     expiryDays,
@@ -518,62 +574,83 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
               <Text weight="semibold" className="form-heading">
                 {t("Connection")}
               </Text>
-              <div className="form-group">
-                {preset === "cloudflareR2" ? (
-                  <Field
-                    label={t("Account ID")}
-                    hint={endpoint ? endpoint : t("Endpoint is derived from the Account ID.")}
-                  >
+              {isS3 ? (
+                <div className="form-group">
+                  {preset === "cloudflareR2" ? (
+                    <Field
+                      label={t("Account ID")}
+                      hint={endpoint ? endpoint : t("Endpoint is derived from the Account ID.")}
+                    >
+                      <Input
+                        value={accountID}
+                        onChange={(_, data) => {
+                          setAccountID(data.value);
+                          setEndpoint(data.value.trim() ? r2Endpoint(data.value.trim()) : "");
+                          connectionEdited();
+                        }}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label={t("Endpoint")} required>
+                      <Input value={endpoint} placeholder="s3.example.com" 
+                        onChange={(_, data) => {
+                          setEndpoint(data.value);
+                          connectionEdited();
+                        }}
+                      />
+                    </Field>
+                  )}
+                  <Field label={t("Region")}>
                     <Input
-                      value={accountID}
+                      value={region}
                       onChange={(_, data) => {
-                        setAccountID(data.value);
-                        setEndpoint(data.value.trim() ? r2Endpoint(data.value.trim()) : "");
+                        setRegion(data.value);
                         connectionEdited();
                       }}
                     />
                   </Field>
-                ) : (
-                  <Field label={t("Endpoint")} required>
-                    <Input value={endpoint} placeholder="s3.example.com" 
+                  {preset !== "cloudflareR2" && (
+                    <Field
+                      hint={t("Turn on for servers without a subdomain for each bucket, such as MinIO or a server reached by IP address.")}
+                    >
+                      <Switch
+                        label={t("Use path-style addressing")}
+                        checked={forcePathStyle}
+                        onChange={(_, data) => {
+                          setForcePathStyle(data.checked);
+                          setTestResult(null);
+                          setTestError(null);
+                        }}
+                      />
+                    </Field>
+                  )}
+                </div>
+              ) : (
+                <div className="form-group">
+                  <Field
+                    label={t("Server URL")}
+                    required
+                    validationMessage={endpointProblem ?? undefined}
+                    hint={t("The address of the folder uploads go into, with its path. For Nextcloud and ownCloud: https://your-server/remote.php/dav/files/your-user-name/folder")}
+                  >
+                    <Input
+                      value={endpoint}
+                      placeholder="https://cloud.example.com/remote.php/dav/files/me/aktar"
+                      spellCheck={false}
                       onChange={(_, data) => {
                         setEndpoint(data.value);
                         connectionEdited();
                       }}
                     />
                   </Field>
-                )}
-                <Field label={t("Region")}>
-                  <Input
-                    value={region}
-                    onChange={(_, data) => {
-                      setRegion(data.value);
-                      connectionEdited();
-                    }}
-                  />
-                </Field>
-                {preset !== "cloudflareR2" && (
-                  <Field
-                    hint={t("Turn on for servers without a subdomain for each bucket, such as MinIO or a server reached by IP address.")}
-                  >
-                    <Switch
-                      label={t("Use path-style addressing")}
-                      checked={forcePathStyle}
-                      onChange={(_, data) => {
-                        setForcePathStyle(data.checked);
-                        setTestResult(null);
-                        setTestError(null);
-                      }}
-                    />
-                  </Field>
-                )}
-              </div>
+                </div>
+              )}
 
               <Text weight="semibold" className="form-heading">
                 {t("Credentials")}
               </Text>
               <div className="form-group">
-                <Field label={t("Access Key ID")} required={!existing}>
+                <Field label={isS3 ? t("Access Key ID") : t("User Name")} required={!existing}>
                   <Input
                     value={accessKeyId}
                     placeholder={existing ? t("Unchanged") : undefined}
@@ -582,7 +659,7 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                     onChange={(_, data) => setAccessKeyId(data.value)}
                   />
                 </Field>
-                <Field label={t("Secret Access Key")} required={!existing}>
+                <Field label={isS3 ? t("Secret Access Key") : t("Password")} required={!existing}>
                   <Input
                     type="password"
                     value={secretAccessKey}
@@ -594,22 +671,28 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
               </div>
 
               <Text weight="semibold" className="form-heading">
-                {t("Bucket")}
+                {isS3 ? t("Bucket") : t("Public Base URL")}
               </Text>
               <div className="form-group">
-                <Field label={t("Bucket")} required>
-                  <Input value={bucket} placeholder="screenshots" 
-                    spellCheck={false}
-                    onChange={(_, data) => {
-                      setBucket(data.value);
-                      connectionEdited();
-                    }}
-                  />
-                </Field>
+                {isS3 && (
+                  <Field label={t("Bucket")} required>
+                    <Input value={bucket} placeholder="screenshots" 
+                      spellCheck={false}
+                      onChange={(_, data) => {
+                        setBucket(data.value);
+                        connectionEdited();
+                      }}
+                    />
+                  </Field>
+                )}
                 <Field
                   label={t("Public Base URL")}
                   required
-                  hint={t("The domain files are served from, for example a custom domain or CDN in front of the bucket.")}
+                  hint={
+                    isS3
+                      ? t("The domain files are served from, for example a custom domain or CDN in front of the bucket.")
+                      : t("The web address this folder is served from. A file’s path in the folder is added to it for its link.")
+                  }
                 >
                   <Input
                     value={publicBaseURL}
@@ -695,40 +778,44 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                 )}
               </div>
 
-              <Text weight="semibold" className="form-heading">
-                {t("Auto-delete")}
-              </Text>
-              <div className="form-group">
-                <Text size={200} className="secondary">
-                  {t("Uploads with “Delete after” turned on are removed by lifecycle rules in the bucket.")}
-                </Text>
-                <ExpiryRulesState check={rulesCheck} />
-                {rulesError && (
-                  <Text size={200} className="text-error">
-                    {rulesError}
+              {capabilities.expiryRules && (
+                <>
+                  <Text weight="semibold" className="form-heading">
+                    {t("Auto-delete")}
                   </Text>
-                )}
-                <div className="inline-row">
-                  <Button
-                    size="small"
-                    disabled={isCheckingRules}
-                    icon={isCheckingRules ? <Spinner size="tiny" /> : undefined}
-                    onClick={setUpRules}
-                  >
-                    {isCheckingRules ? t("Checking…") : rulesCheck ? t("Check Again") : t("Set Up")}
-                  </Button>
-                  {rulesCheck?.status.kind === "active" && (
-                    <Button size="small" disabled={isCheckingRules} onClick={() => setIsConfirmingTurnOff(true)}>
-                      {t("Turn Off…")}
-                    </Button>
-                  )}
-                  {rulesCheck && (
+                  <div className="form-group">
                     <Text size={200} className="secondary">
-                      {t("Last checked {0}", formatDateTime(rulesCheck.checkedAt, locale))}
+                      {t("Uploads with “Delete after” turned on are removed by lifecycle rules in the bucket.")}
                     </Text>
-                  )}
-                </div>
-              </div>
+                    <ExpiryRulesState check={rulesCheck} />
+                    {rulesError && (
+                      <Text size={200} className="text-error">
+                        {rulesError}
+                      </Text>
+                    )}
+                    <div className="inline-row">
+                      <Button
+                        size="small"
+                        disabled={isCheckingRules}
+                        icon={isCheckingRules ? <Spinner size="tiny" /> : undefined}
+                        onClick={setUpRules}
+                      >
+                        {isCheckingRules ? t("Checking…") : rulesCheck ? t("Check Again") : t("Set Up")}
+                      </Button>
+                      {rulesCheck?.status.kind === "active" && (
+                        <Button size="small" disabled={isCheckingRules} onClick={() => setIsConfirmingTurnOff(true)}>
+                          {t("Turn Off…")}
+                        </Button>
+                      )}
+                      {rulesCheck && (
+                        <Text size={200} className="secondary">
+                          {t("Last checked {0}", formatDateTime(rulesCheck.checkedAt, locale))}
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
 
               <Text weight="semibold" className="form-heading">
                 {t("Upload Defaults")}
@@ -746,33 +833,37 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                     <option value="custom">{t("Custom")}</option>
                   </Select>
                 </Field>
-                <Field label={t("Link")}>
-                  <Select
-                    value={String(temporaryLink ?? "")}
-                    onChange={(_, data) => setTemporaryLink(data.value ? Number(data.value) : null)}
-                  >
-                    <option value="">{temporaryLinkLabel(null, t)}</option>
-                    {temporaryLinkDurations.map((seconds) => (
-                      <option key={seconds} value={seconds}>
-                        {temporaryLinkLabel(seconds, t)}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label={t("Delete after")}>
-                  <Select
-                    value={String(expiryDays)}
-                    disabled={rulesCheck?.status.kind !== "active"}
-                    onChange={(_, data) => setExpiryDays(Number(data.value))}
-                  >
-                    <option value="0">{t("Off")}</option>
-                    {expiryDurations.map((days) => (
-                      <option key={days} value={days}>
-                        {durationLabel(days, t)}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
+                {capabilities.temporaryLinks && (
+                  <Field label={t("Link")}>
+                    <Select
+                      value={String(temporaryLink ?? "")}
+                      onChange={(_, data) => setTemporaryLink(data.value ? Number(data.value) : null)}
+                    >
+                      <option value="">{temporaryLinkLabel(null, t)}</option>
+                      {temporaryLinkDurations.map((seconds) => (
+                        <option key={seconds} value={seconds}>
+                          {temporaryLinkLabel(seconds, t)}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+                {capabilities.expiryRules && (
+                  <Field label={t("Delete after")}>
+                    <Select
+                      value={String(expiryDays)}
+                      disabled={rulesCheck?.status.kind !== "active"}
+                      onChange={(_, data) => setExpiryDays(Number(data.value))}
+                    >
+                      <option value="0">{t("Off")}</option>
+                      {expiryDurations.map((days) => (
+                        <option key={days} value={days}>
+                          {durationLabel(days, t)}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
                 <Field
                   label={t("Image metadata")}
                   hint={imageMetadata === "keepAll" ? undefined : t("Videos (MOV, MP4) are uploaded with their location.")}
@@ -1052,7 +1143,7 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
               </div>
 
               <div ref={testOutcome}>
-                <ConnectionTestResult result={testResult} error={testError} />
+                <ConnectionTestResult result={testResult} error={testError} kind={kind} />
               </div>
               {saveError && (
                 <Text size={200} className="text-error">

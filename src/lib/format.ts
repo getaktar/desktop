@@ -1,4 +1,4 @@
-import type { OutputMode, ProviderPreset, UploadRecord } from "./api";
+import { kindOfPreset, type DestinationConfig, type OutputMode, type ProviderPreset, type UploadRecord } from "./api";
 import type { Translate } from "./i18n";
 
 /** Splits like NSString.pathExtension: ".env" has no extension. */
@@ -236,6 +236,20 @@ export function expiryLabel(expiresAt: number, now: number, t: Translate) {
   return t("Deletes in {0} days", days);
 }
 
+/** Where a destination's files are, wherever a bucket's name is shown: its
+ * bucket, or for WebDAV the server's host and folder
+ * ("cloud.example.com/remote.php/dav/files/me/aktar"). */
+export function storageLocation(destination: Pick<DestinationConfig, "preset" | "bucket" | "endpoint">): string {
+  if (kindOfPreset(destination.preset) === "s3") return destination.bucket;
+  const raw = destination.endpoint.trim();
+  try {
+    const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    return `${url.host}${decodeURIComponent(url.pathname)}`.replace(/\/+$/, "");
+  } catch {
+    return raw;
+  }
+}
+
 export function providerName(preset: ProviderPreset, t: Translate) {
   switch (preset) {
     case "cloudflareR2":
@@ -250,6 +264,8 @@ export function providerName(preset: ProviderPreset, t: Translate) {
       return "DigitalOcean Spaces";
     case "customS3":
       return t("Other S3-Compatible");
+    case "webdav":
+      return "WebDAV";
   }
 }
 

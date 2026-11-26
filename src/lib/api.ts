@@ -32,11 +32,35 @@ export type ProviderPreset =
   | "minIO"
   | "backblazeB2"
   | "digitalOceanSpaces"
-  | "customS3";
+  | "customS3"
+  | "webdav";
 
-/** The kind of storage a destination is, told by its preset. Every preset
- * is S3 for now. */
+/** The kind of storage a destination is, told by its preset. */
 export type StorageKind = "s3" | "webdav" | "sftp";
+
+/** A preset with its kind and what it can do (`storage_presets`), so the
+ * destination form shows the fields and controls of the one being picked. */
+export interface PresetInfo {
+  preset: ProviderPreset;
+  kind: StorageKind;
+  capabilities: StorageCapabilities;
+}
+
+/** The kind a preset is, for a destination that didn't come with its own
+ * (`list_destinations` fills it in). */
+export const kindOfPreset = (preset: ProviderPreset): StorageKind => (preset === "webdav" ? "webdav" : "s3");
+
+/** Whether a destination can do what only some kinds of storage can
+ * (temporary links, Delete after, Request Files). Asks its capabilities;
+ * one without them (not from `list_destinations`) is judged by its kind,
+ * where only S3 has these. */
+export function canDo(
+  destination: Pick<DestinationConfig, "preset" | "capabilities"> | null | undefined,
+  capability: "temporaryLinks" | "expiryRules" | "fileRequests",
+): boolean {
+  if (!destination) return false;
+  return destination.capabilities ? destination.capabilities[capability] : kindOfPreset(destination.preset) === "s3";
+}
 
 /** What a destination's storage can do (`Capabilities` in destinations.rs):
  * a control its kind can't use is hidden rather than shown and failing. */
@@ -774,6 +798,7 @@ export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
 
   listDestinations: () => invoke<DestinationConfig[]>("list_destinations"),
+  storagePresets: () => invoke<PresetInfo[]>("storage_presets"),
   /** `deleteOldThumbnails` empties the bucket folder `thumbnailCleanupPrefix`
    * names, in the background. */
   /** `cloudflareToken`: null keeps the saved one, "" removes it.

@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 
 import {
   api,
+  canDo,
   errorMessage,
   expiryDurations,
   expiryRulesActive,
@@ -218,39 +219,44 @@ export function WatchedFolderForm({
                       />
                     )}
                   </Field>
-                  <Field label={t("Link")}>
-                    <Select
-                      value={current.temporaryLink === null ? "" : String(current.temporaryLink)}
-                      onChange={(_, data) =>
-                        update({ temporaryLink: data.value === "" ? null : data.value === "public" ? "public" : Number(data.value) })
-                      }
+                  {/* Only where the destination's storage has them (not WebDAV). */}
+                  {(!destination || canDo(destination, "temporaryLinks")) && (
+                    <Field label={t("Link")}>
+                      <Select
+                        value={current.temporaryLink === null ? "" : String(current.temporaryLink)}
+                        onChange={(_, data) =>
+                          update({ temporaryLink: data.value === "" ? null : data.value === "public" ? "public" : Number(data.value) })
+                        }
+                      >
+                        <option value="">{t("Destination default")}</option>
+                        <option value="public">{t("Public")}</option>
+                        {temporaryLinkDurations.map((seconds) => (
+                          <option key={seconds} value={String(seconds)}>
+                            {temporaryLinkLabel(seconds, t)}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
+                  {(!destination || canDo(destination, "expiryRules")) && (
+                    <Field
+                      label={t("Delete after")}
+                      hint={rulesActive ? undefined : t("Only once auto-delete is set up for the destination.")}
                     >
-                      <option value="">{t("Destination default")}</option>
-                      <option value="public">{t("Public")}</option>
-                      {temporaryLinkDurations.map((seconds) => (
-                        <option key={seconds} value={String(seconds)}>
-                          {temporaryLinkLabel(seconds, t)}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field
-                    label={t("Delete after")}
-                    hint={rulesActive ? undefined : t("Only once auto-delete is set up for the destination.")}
-                  >
-                    <Select
-                      value={current.expiryDays === null ? "" : String(current.expiryDays)}
-                      onChange={(_, data) => update({ expiryDays: data.value === "" ? null : Number(data.value) })}
-                    >
-                      <option value="">{t("Destination default")}</option>
-                      <option value="0">{t("Never")}</option>
-                      {expiryDurations.map((days) => (
-                        <option key={days} value={String(days)}>
-                          {durationLabel(days, t)}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
+                      <Select
+                        value={current.expiryDays === null ? "" : String(current.expiryDays)}
+                        onChange={(_, data) => update({ expiryDays: data.value === "" ? null : Number(data.value) })}
+                      >
+                        <option value="">{t("Destination default")}</option>
+                        <option value="0">{t("Never")}</option>
+                        {expiryDurations.map((days) => (
+                          <option key={days} value={String(days)}>
+                            {durationLabel(days, t)}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
                 </div>
 
                 <Text weight="semibold" className="form-heading">

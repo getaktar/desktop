@@ -2399,7 +2399,7 @@ async fn shorten(
     let now = crate::util::now_millis();
     // `link` differs from its public URL (the file's, or its page's) only
     // when it's a temporary link.
-    let temporary_expires_at = destination.temporary_link.filter(|_| link != public_link).map(|seconds| now + seconds as i64 * 1000);
+    let temporary_expires_at = destination.temporary_link_seconds().filter(|_| link != public_link).map(|seconds| now + seconds as i64 * 1000);
     if input.replacing.is_some() || input.short_link == Some(false) {
         return Attempt::Skipped;
     }

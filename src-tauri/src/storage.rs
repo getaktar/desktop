@@ -1,14 +1,17 @@
 //! Storage backends. Every S3 preset (AWS S3, Cloudflare R2, MinIO,
 //! Backblaze B2, DigitalOcean Spaces, custom) goes through the one
-//! `S3Provider` here, never a separate upload engine per provider. Callers
-//! get it through `backend` (see `backend.rs`), which is where other kinds
-//! of storage are added; only the S3-only operations (presigned URLs,
+//! `S3Provider` here, never a separate upload engine per provider, and
+//! WebDAV through `WebdavProvider` (see `webdav.rs`). Callers get either
+//! through `backend` (see `backend.rs`), which is where other kinds of
+//! storage are added; only the S3-only operations (presigned URLs,
 //! lifecycle rules, CORS, multipart sessions) are called on `S3Provider`
 //! itself, after checking the destination's capabilities.
 
 mod backend;
+mod webdav;
 
 pub use backend::{backend, Backend};
+pub use webdav::WebdavProvider;
 
 use std::path::Path;
 use std::pin::Pin;
@@ -131,6 +134,26 @@ pub enum StorageError {
     /// first, so this only stops one that didn't.
     #[error("{}", t!("This destination can't do that."))]
     Unsupported,
+    /// WebDAV's 401: the user name or password is wrong.
+    #[error("{}", t!("Could not sign in. Check your user name and password."))]
+    InvalidLogin,
+    /// WebDAV's 404 for the server URL itself: the folder uploads go into
+    /// isn't there.
+    #[error("{}", t!("Folder not found. Check the Server URL."))]
+    FolderNotFound,
+    /// WebDAV's 403: the account may not do this here.
+    #[error("{}", t!("The server refused this. Check that this account can write to the folder."))]
+    Refused,
+    /// WebDAV's 507 Insufficient Storage.
+    #[error("{}", t!("The server is out of space."))]
+    OutOfSpace,
+    /// A WebDAV server URL with plain http to another computer.
+    #[error("{}", t!("The Server URL has to start with https://. Only localhost can use http://."))]
+    InsecureServer,
+    /// A WebDAV server answered a write with a redirect, which isn't
+    /// followed so the password never goes elsewhere.
+    #[error("{}", t!("The server sent this to another address ({0}). Use that address as the Server URL.", .0))]
+    Redirected(String),
     #[error("{0}")]
     Unknown(String),
 }

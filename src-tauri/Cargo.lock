@@ -108,6 +108,7 @@ dependencies = [
  "pbkdf2",
  "percent-encoding",
  "qrcode",
+ "quick-xml 0.42.0",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "rusqlite",

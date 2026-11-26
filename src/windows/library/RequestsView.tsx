@@ -3,7 +3,7 @@ import { AddRegular, ArrowSyncRegular, CopyRegular, DismissRegular, QrCodeRegula
 import { useState } from "react";
 
 import { RequestFilesDialog, RequestLink, requestSizeLabel } from "../../components/RequestFilesDialog";
-import { api, errorMessage, type FileRequest } from "../../lib/api";
+import { api, canDo, errorMessage, type FileRequest } from "../../lib/api";
 import { formatDateTime } from "../../lib/format";
 import { useDestinations, useRequests } from "../../lib/hooks";
 import { useI18n } from "../../lib/i18n";
@@ -40,7 +40,7 @@ export function RequestsView({ active }: { active: boolean }) {
           <Button icon={<ArrowSyncRegular />} disabled={checking} onClick={checkNow}>
             {t("Check Now")}
           </Button>
-          <Button appearance="primary" icon={<AddRegular />} disabled={destinations.length === 0} onClick={() => setCreating(true)}>
+          <Button appearance="primary" icon={<AddRegular />} disabled={!destinations.some((destination) => canDo(destination, "fileRequests"))} onClick={() => setCreating(true)}>
             {t("Request Files…")}
           </Button>
         </div>

@@ -48,6 +48,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # are already built for the SDK.
 aws-sigv4 = "1"
 md-5 = "0.11"
+# WebDAV PROPFIND answers, read by namespace (see `storage::webdav`).
+# Already in the lock file for Tauri's own tools, so nothing new is fetched.
+quick-xml = { version = "0.42", default-features = false }
 
 # Linux keeps secrets in the Secret Service (GNOME Keyring, KWallet), which
 # survives a restart. "linux-native" would be the kernel keyring, which
