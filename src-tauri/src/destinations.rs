@@ -80,7 +80,7 @@ pub struct DestinationConfig {
     /// What's copied after an upload here; none follows Settings > Output.
     /// With the fields below, destinations work as upload profiles
     /// ("Builds", "Logs", "Screenshots"), even several on one bucket.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub output_mode: Option<OutputMode>,
     /// "Delete after" for uploads here, in days (0 keeps them); none until
     /// it's picked for this destination, when Settings' last choice applies.
@@ -93,15 +93,15 @@ pub struct DestinationConfig {
     pub temporary_link: Option<u64>,
     /// What to strip from photos before they're uploaded here; none is
     /// `ImageMetadataPolicy::default()` (remove the location).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub image_metadata: Option<ImageMetadataPolicy>,
     /// How folders are uploaded here; none is `FolderUploadMode::default()`
     /// (as a ZIP).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub folder_upload: Option<FolderUploadMode>,
     /// Converting, recompressing and resizing photos before they're
     /// uploaded here; none leaves them as they are.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub image_processing: Option<ImageProcessing>,
     /// Where thumbnails of uploads here are kept; none is
     /// `ThumbnailMode::default()` (on this PC). See `thumbnail_mode`.
@@ -125,7 +125,7 @@ pub struct DestinationConfig {
     pub cloudflare_zone_id: Option<String>,
     /// Run after each upload and replace here (not for a watched folder's
     /// files, which run their folder's own).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub hooks: Option<Vec<Hook>>,
     /// The link shortener uploads here go through; none is off. Its token
     /// is in Credential Manager with the keys (`StorageCredentials`).
@@ -138,7 +138,7 @@ pub struct DestinationConfig {
     pub share_page: Option<bool>,
     /// Encrypted links: files are encrypted here before they go up; none
     /// is off. A value this version doesn't know reads as off.
-    #[serde(default, deserialize_with = "lenient_encryption")]
+    #[serde(default, deserialize_with = "lenient")]
     pub encryption: Option<EncryptionMode>,
     /// The page origin file requests' CORS rule was set up for on this
     /// bucket. Not transferred to other devices.
@@ -156,8 +156,9 @@ pub enum EncryptionMode {
     Password,
 }
 
-/// An unknown `encryption` value is off rather than a broken file.
-fn lenient_encryption<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<EncryptionMode>, D::Error> {
+/// A setting this version can't read (a mode a newer one added, say) is
+/// off rather than a destination, or a destinations.json, that can't be read.
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(deserializer: D) -> Result<Option<T>, D::Error> {
     let value = Option::<serde_json::Value>::deserialize(deserializer)?;
     Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
@@ -311,12 +312,58 @@ pub fn normalized_zone_id(raw: &str) -> Option<String> {
     (zone.len() == 32 && zone.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(zone)
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Default)]
 struct Wrapper {
     destinations: Vec<DestinationConfig>,
-    #[serde(rename = "defaultID")]
     default_id: Option<String>,
+    /// Destinations this version can't read (a kind of storage a newer
+    /// one added, say), kept as they were so saving doesn't drop them.
+    unreadable: Vec<serde_json::Value>,
+}
+
+/// destinations.json as it's saved. Each destination is read on its own,
+/// so one this version can't read doesn't take the others with it.
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    #[serde(default)]
+    destinations: Vec<serde_json::Value>,
+    #[serde(rename = "defaultID", default)]
+    default_id: Option<String>,
+}
+
+impl Wrapper {
+    fn from_stored(stored: Stored) -> Self {
+        let mut wrapper = Wrapper { default_id: stored.default_id, ..Default::default() };
+        for value in stored.destinations {
+            match serde_json::from_value::<DestinationConfig>(value.clone()) {
+                Ok(destination) => wrapper.destinations.push(destination),
+                Err(error) => {
+                    log::warn!("Kept a destination this version can't read: {error}");
+                    wrapper.unreadable.push(value);
+                }
+            }
+        }
+        wrapper
+    }
+
+    fn stored(&self) -> Stored {
+        let readable = self.destinations.iter().filter_map(|destination| serde_json::to_value(destination).ok());
+        Stored { destinations: readable.chain(self.unreadable.iter().cloned()).collect(), default_id: self.default_id.clone() }
+    }
+}
+
+/// Reads destinations.json. A file that isn't JSON at all is copied to
+/// destinations.unreadable.json first, so the next save can't lose it.
+fn read_wrapper(path: &Path) -> Wrapper {
+    let Ok(data) = std::fs::read(path) else { return Wrapper::default() };
+    match serde_json::from_slice::<Stored>(&data) {
+        Ok(stored) => Wrapper::from_stored(stored),
+        Err(error) => {
+            log::error!("Could not read {}: {error}", path.display());
+            let _ = std::fs::copy(path, path.with_file_name("destinations.unreadable.json"));
+            Wrapper::default()
+        }
+    }
 }
 
 pub struct DestinationStore {
@@ -327,10 +374,7 @@ pub struct DestinationStore {
 impl DestinationStore {
     pub fn load(directory: &Path) -> Self {
         let path = directory.join("destinations.json");
-        let mut wrapper: Wrapper = std::fs::read(&path)
-            .ok()
-            .and_then(|data| serde_json::from_slice(&data).ok())
-            .unwrap_or_default();
+        let mut wrapper = read_wrapper(&path);
         wrapper.destinations.iter_mut().for_each(DestinationConfig::sanitize);
         sync_default_flags(&mut wrapper);
         Self { path, inner: Mutex::new(wrapper) }
@@ -418,7 +462,7 @@ impl DestinationStore {
         let mut inner = self.inner.lock().unwrap();
         change(&mut inner);
         sync_default_flags(&mut inner);
-        crate::util::write_json_atomically(&self.path, &*inner);
+        crate::util::write_json_atomically(&self.path, &inner.stored());
     }
 }
 
@@ -464,6 +508,40 @@ mod tests {
         let mut unknown = unknown;
         unknown.sanitize();
         assert_eq!(unknown.share_page, None);
+    }
+
+    const BASE: &str = r#""name":"N","preset":"minIO","endpoint":"e","region":"r","bucket":"b","publicBaseURL":"p","objectPathTemplate":"{uuid}.{ext}","forcePathStyle":true"#;
+
+    #[test]
+    fn keeps_destinations_it_cannot_read() {
+        let directory = std::env::temp_dir().join(format!("aktar-destinations-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("destinations.json");
+        // A kind of storage a newer version added, and a mode this one doesn't know.
+        let newer = r#"{"id":"B","name":"Server","kind":"sftp","host":"example.com"}"#;
+        let file = format!(r#"{{"destinations":[{{"id":"A",{BASE},"folderUpload":"someNewMode","outputMode":"someNewOutput"}},{newer}],"defaultID":"A"}}"#);
+        std::fs::write(&path, file).unwrap();
+
+        let store = DestinationStore::load(&directory);
+        let all = store.all();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "A");
+        assert_eq!(all[0].folder_upload, None);
+        assert_eq!(all[0].output_mode, None);
+
+        // Saving keeps the one it couldn't read, as it was.
+        store.modify("A", |destination| destination.name = "Renamed".into());
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let saved = saved["destinations"].as_array().unwrap().clone();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[0]["name"], "Renamed");
+        assert_eq!(saved[1], serde_json::from_str::<serde_json::Value>(newer).unwrap());
+
+        // A file that isn't JSON is copied aside before anything replaces it.
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(DestinationStore::load(&directory).all().is_empty());
+        assert_eq!(std::fs::read(directory.join("destinations.unreadable.json")).unwrap(), b"{not json");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

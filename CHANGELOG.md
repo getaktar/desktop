@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-26
+
+### Fixed
+
+- A destination saved by a newer version (a kind of storage this one doesn't
+  know, say) no longer makes every destination disappear: it's kept as it is
+  and written back on save. A destination setting this version doesn't know
+  (output, image metadata, folders, image processing, hooks) reads as off.
+- A destinations.json that can't be read at all is copied to
+  destinations.unreadable.json before a new one is saved over it.
+
 ## [0.16.0] - 2026-11-25
 
 ### Added
