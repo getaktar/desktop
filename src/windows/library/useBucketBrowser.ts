@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, canDo, errorMessage, events, type BucketObject, type DestinationConfig, type UploadSucceeded } from "../../lib/api";
-import { folderDisplayName, nameOfKey, parentOfFolder, parentOfKey, resolvePublicUrl } from "../../lib/format";
+import { folderDisplayName, nameOfKey, parentOfFolder, parentOfKey, resolvePublicUrl, storageRootName } from "../../lib/format";
 import { useTauriEvent } from "../../lib/hooks";
 import { useI18n } from "../../lib/i18n";
 
@@ -406,14 +406,14 @@ export function useBucketBrowser(destination: DestinationConfig) {
   );
 
   const breadcrumbs = useMemo(() => {
-    const crumbs = [{ name: destination.bucket, prefix: "" }];
+    const crumbs = [{ name: storageRootName(destination), prefix: "" }];
     let running = "";
     for (const part of prefix.split("/").filter(Boolean)) {
       running += `${part}/`;
       crumbs.push({ name: part, prefix: running });
     }
     return crumbs;
-  }, [prefix, destination.bucket]);
+  }, [prefix, destination]);
 
   return {
     destination,

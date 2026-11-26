@@ -7,11 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-26
+
+### Added
+
+- WebDAV destinations: upload to any WebDAV folder (Nextcloud, ownCloud,
+  Synology, Hetzner Storage Box, Apache, nginx, rclone) with a Server URL,
+  user name and password; links come from the Public Base URL as for S3.
+  Test Connection checks sign-in, upload and the public link. Files of any
+  size go up in one streamed request. Temporary links, Delete after,
+  Request Files and Set Up Cloudflare R2 follow what the destination can
+  do and are hidden for WebDAV.
+- Share to Another Device sends WebDAV destinations as transfer format 2,
+  which older versions turn down; S3 destinations keep format 1.
+- The local API reports each destination's `kind`.
+
 ### Fixed
 
 - Linux: on KDE Plasma's Wayland session the panel's title bar showed a
   generic icon. The window now says it's Aktar (app_id and X11 window class
   `Aktar`, matching Aktar.desktop).
+- The Library's bucket browser names the root of a WebDAV folder after the
+  folder (it was blank).
 
 ## [0.16.1] - 2026-11-26
 

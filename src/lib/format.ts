@@ -250,6 +250,21 @@ export function storageLocation(destination: Pick<DestinationConfig, "preset" | 
   }
 }
 
+/** The name of where uploads go, for the root of a bucket browser: the
+ * bucket for S3, the last folder of the Server URL (or its host) for
+ * another kind. Same as the Mac's `storageRootName`. */
+export function storageRootName(destination: Pick<DestinationConfig, "preset" | "bucket" | "endpoint">): string {
+  if (kindOfPreset(destination.preset) === "s3") return destination.bucket;
+  const raw = destination.endpoint.trim();
+  try {
+    const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    const last = url.pathname.split("/").filter(Boolean).pop();
+    return last ? decodeURIComponent(last) : url.host;
+  } catch {
+    return raw;
+  }
+}
+
 export function providerName(preset: ProviderPreset, t: Translate) {
   switch (preset) {
     case "cloudflareR2":
