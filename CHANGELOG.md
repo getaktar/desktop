@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: on KDE Plasma's Wayland session the panel's title bar showed a
+  generic icon. The window now says it's Aktar (app_id and X11 window class
+  `Aktar`, matching Aktar.desktop).
+
 ## [0.16.1] - 2026-11-26
 
 ### Fixed

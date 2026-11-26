@@ -78,6 +78,14 @@ pub fn serve_explorer_command() -> bool {
 }
 
 pub fn run() {
+    // GTK sends GLib's program name as the window's Wayland app_id, and
+    // desktops find the window's icon by looking for a .desktop file of
+    // that name. It's the binary's name ("aktar") unless set, while the
+    // packages install Aktar.desktop, so KDE's title bar showed a generic
+    // icon. On X11 it's also the window class (StartupWMClass=Aktar).
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some("Aktar"));
+
     let mut builder = tauri::Builder::default();
 
     // Must come first: a second launch (from the Start menu, or an aktar://

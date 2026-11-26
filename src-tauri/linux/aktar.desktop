@@ -4,7 +4,7 @@ Categories={{categories}}
 Comment={{comment}}
 {{/if}}
 Exec={{exec}} %u
-StartupWMClass=aktar
+StartupWMClass=Aktar
 Icon={{icon}}
 Name={{name}}
 Terminal=false

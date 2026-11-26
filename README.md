@@ -57,9 +57,20 @@ Good to know before you start:
 - Upload and paste needs xdotool (X11), or wtype or ydotool (Wayland). On
   GNOME Wayland that means ydotool and the `input` group, see
   [Linux](#linux) below.
-- Aktar for Linux is new (since 0.15.0) and tested on GNOME and KDE
-  Plasma (Ubuntu, Fedora). Problems and distro reports are welcome in
-  [issues](https://github.com/getaktar/desktop/issues).
+- Aktar for Linux is new (since 0.15.0). Problems and distro reports are
+  welcome in [issues](https://github.com/getaktar/desktop/issues).
+
+Tested on:
+
+| Distribution | Desktop | Session | Tray and panel | Capture | Upload and paste |
+|---|---|---|---|---|---|
+| Ubuntu 26.04 | GNOME 50 | Wayland | yes | screenshot portal | ydotool |
+| Ubuntu 26.04 | KDE Plasma 6.6 | Wayland | yes | screenshot portal | wtype (Plasma asks once for "Remote Control") |
+| Ubuntu 26.04 | KDE Plasma 6.6 | X11 | yes | screenshot portal, Spectacle | xdotool |
+| Fedora 44 | GNOME | Wayland | with the AppIndicator extension | screenshot portal | ydotool |
+
+Other desktops with a tray (Cinnamon, XFCE) should work the same way but
+haven't been tried yet.
 
 ## Features
 

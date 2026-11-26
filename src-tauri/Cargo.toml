@@ -97,6 +97,9 @@ trash = "5"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The program name, which GTK sends as the Wayland app_id (see lib.rs).
+# Already built for GTK.
+glib = "0.18"
 # Capture through the desktop's own screenshot dialog (xdg-desktop-portal,
 # the only way on Wayland) and the light/dark setting. zbus is already
 # built for the notification plugin.

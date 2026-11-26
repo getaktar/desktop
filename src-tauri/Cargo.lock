@@ -91,6 +91,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures-util",
+ "glib",
  "hmac 0.13.0",
  "http-body",
  "icu_normalizer",
