@@ -5,3 +5,7 @@
 # Test value, not a secret: the derived key of the share page encryption test
 # vector (a fixed test password), shared with the Mac and mobile apps.
 94d41b5b06874faa602342aba29d80cfd04872b4:src-tauri/tests/fixtures/share-page-vectors.json:generic-api-key:49
+# Not secrets: PEM and OpenSSH private key header lines in the SFTP core's
+# key detection tests.
+8de18298532176215d5f7ebd7a82fc7ecd3ea65d:crates/sftp-core/src/tests.rs:private-key:109
+8de18298532176215d5f7ebd7a82fc7ecd3ea65d:crates/sftp-core/src/tests.rs:private-key:128
