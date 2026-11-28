@@ -230,6 +230,11 @@ fn encode_payload(payload: &TransferPayload, now: i64) -> Vec<u8> {
     if let Some(token) = payload.credentials.cloudflare_token.as_deref().filter(|token| !token.is_empty()) {
         credentials["cloudflareToken"] = token.into();
     }
+    if let Some(passphrase) = payload.credentials.key_passphrase.as_deref().filter(|passphrase| !passphrase.is_empty()) {
+        if payload.destination.kind() == StorageKind::Sftp {
+            credentials["keyPassphrase"] = passphrase.into();
+        }
+    }
     if let Some(token) = payload.credentials.short_link_token.as_deref().filter(|token| !token.is_empty()) {
         if payload.destination.short_links.is_some() {
             credentials["shortLinkToken"] = token.into();
@@ -288,7 +293,12 @@ fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferErro
         account_id: trimmed(object.get("accountID")),
         endpoint: required(object, "endpoint")?,
         region: trimmed(object.get("region")).unwrap_or_else(|| default_region(preset).into()),
-        bucket: if s3 { required(object, "bucket")? } else { String::new() },
+        // SFTP's folder may be empty: the login folder.
+        bucket: match preset.kind() {
+            StorageKind::S3 => required(object, "bucket")?,
+            StorageKind::Sftp => trimmed(object.get("bucket")).unwrap_or_default(),
+            StorageKind::Webdav => String::new(),
+        },
         public_base_url: required(object, "publicBaseURL")?,
         object_path_template: trimmed(object.get("objectPathTemplate")).unwrap_or_else(|| DEFAULT_OBJECT_PATH.into()),
         force_path_style: s3 && object.get("forcePathStyle").and_then(Value::as_bool).unwrap_or(preset == ProviderPreset::MinIO),
@@ -314,6 +324,7 @@ fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferErro
         encryption: known(object.get("encryption")),
         // Set up again on this device's first request.
         request_cors_origin: None,
+        ssh_host_key: trimmed(object.get("sshHostKey")),
     };
     // Values this app doesn't offer (a "Delete after" or link duration)
     // are dropped, the same as in destinations.json.
@@ -326,6 +337,8 @@ fn decode_payload(data: &[u8], now: i64) -> Result<TransferPayload, TransferErro
         cloudflare_token: trimmed(keys.get("cloudflareToken")),
         // Only along with the settings it's for.
         short_link_token: destination.short_links.as_ref().and_then(|_| trimmed(keys.get("shortLinkToken"))),
+        // SFTP: an encrypted private key's passphrase, as it was typed.
+        key_passphrase: string(keys.get("keyPassphrase")).filter(|_| destination.kind() == StorageKind::Sftp),
     };
     Ok(TransferPayload { destination, credentials, custom_template: string(root.get("customTemplate")) })
 }
@@ -358,7 +371,7 @@ fn hooks(value: Option<&Value>) -> Option<Vec<Hook>> {
 fn default_region(preset: ProviderPreset) -> &'static str {
     match preset {
         ProviderPreset::AmazonS3 => "us-east-1",
-        ProviderPreset::Webdav => "",
+        ProviderPreset::Webdav | ProviderPreset::Sftp => "",
         _ => "auto",
     }
 }
@@ -538,6 +551,7 @@ mod tests {
                 session_token: None,
                 cloudflare_token: None,
                 short_link_token: None,
+                key_passphrase: None,
             },
             custom_template: None,
         };
@@ -643,6 +657,7 @@ mod tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: Some("short-secret".into()),
+            key_passphrase: None,
         };
         let payload = TransferPayload { destination: destination.clone(), credentials, custom_template: None };
         let plaintext = encode_payload(&payload, 1_000);
@@ -701,7 +716,7 @@ mod tests {
         destination.request_cors_origin = Some("https://cdn.example.com".into());
         let payload = TransferPayload {
             destination,
-            credentials: StorageCredentials { access_key_id: "AKID".into(), secret_access_key: "secret".into(), session_token: None, cloudflare_token: None, short_link_token: None },
+            credentials: StorageCredentials { access_key_id: "AKID".into(), secret_access_key: "secret".into(), session_token: None, cloudflare_token: None, short_link_token: None, key_passphrase: None },
             custom_template: None,
         };
         let data = encode_payload(&payload, 1_000);
@@ -751,6 +766,7 @@ mod tests {
                 session_token: Some("token".into()),
                 cloudflare_token: Some("cf-token".into()),
                 short_link_token: None,
+                key_passphrase: None,
             },
             custom_template: Some("<{url}>".into()),
         };
@@ -806,6 +822,7 @@ mod tests {
                 session_token: None,
                 cloudflare_token: None,
                 short_link_token: None,
+                key_passphrase: None,
             },
             custom_template: None,
         }
@@ -835,6 +852,57 @@ mod tests {
         // The S3-only settings it carried (a temporary link, Delete after)
         // come along but aren't used.
         assert_eq!(opened.destination.temporary_link_seconds(), None);
+    }
+
+    #[test]
+    fn sftp_travels_as_version_two_with_its_key_and_folder() {
+        let mut destination = open(FULL, CODE).unwrap().destination;
+        destination.preset = ProviderPreset::Sftp;
+        destination.account_id = None;
+        destination.endpoint = "files.example.com:2222".into();
+        destination.bucket = "/var/www/files".into();
+        destination.public_base_url = "https://files.example.com".into();
+        destination.ssh_host_key = Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ".into());
+        destination.sanitize();
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----";
+        let payload = TransferPayload {
+            destination,
+            credentials: StorageCredentials { access_key_id: "deploy".into(), secret_access_key: key.into(), key_passphrase: Some(" two words ".into()), ..Default::default() },
+            custom_template: None,
+        };
+        let json: Value = serde_json::from_slice(&encode_payload(&payload, 1_000)).unwrap();
+        assert_eq!(json["v"], 2);
+        assert_eq!(json["destination"]["preset"], "sftp");
+        assert_eq!(json["destination"]["bucket"], "/var/www/files");
+        assert_eq!(json["destination"]["region"], "");
+        assert!(json["destination"]["sshHostKey"].as_str().unwrap().starts_with("ssh-ed25519 AAAA"));
+        assert_eq!(json["credentials"]["keyPassphrase"], " two words ");
+
+        let link = seal(&payload, CODE).unwrap();
+        assert_eq!(envelope(&link).unwrap()[0], 2);
+        let opened = open(&link, CODE).unwrap();
+        assert_eq!(opened.destination, DestinationConfig { is_default: false, ..payload.destination.clone() });
+        assert_eq!(opened.destination.kind(), StorageKind::Sftp);
+        assert_eq!(opened.credentials.secret_access_key, key);
+        // The passphrase as typed, spaces and all.
+        assert_eq!(opened.credentials.key_passphrase.as_deref(), Some(" two words "));
+
+        // An empty folder is the login folder; no host key is trusted on
+        // first use.
+        let data = serde_json::to_vec(&json!({
+            "v": 2,
+            "destination": { "id": "0F0E8A57-4D8C-4C61-9B26-7C3F7E0E9A11", "name": "Box", "preset": "sftp", "endpoint": "u1.your-storagebox.de:23", "publicBaseURL": "https://files.example.com" },
+            "credentials": { "accessKeyId": "u1", "secretAccessKey": "pw" },
+        }))
+        .unwrap();
+        let opened = decode_payload(&data, 0).unwrap();
+        assert_eq!((opened.destination.bucket.as_str(), opened.destination.ssh_host_key.as_deref()), ("", None));
+        assert_eq!(opened.credentials.key_passphrase, None);
+        // A passphrase only goes along with an SFTP destination.
+        let mut webdav = webdav_payload();
+        webdav.credentials.key_passphrase = Some("x".into());
+        let json: Value = serde_json::from_slice(&encode_payload(&webdav, 1_000)).unwrap();
+        assert!(json["credentials"].get("keyPassphrase").is_none());
     }
 
     #[test]

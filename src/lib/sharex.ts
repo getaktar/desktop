@@ -19,7 +19,9 @@ export interface ShareXStatus {
 export interface ShareXReviewDestination {
   /** The review's own ID for it. */
   id: string;
-  kind: "amazonS3" | "backblazeB2";
+  /** "sftp": an SFTP account of ShareX's FTP list; "ownCloud": its
+   * ownCloud / Nextcloud uploader, as WebDAV. */
+  kind: "amazonS3" | "backblazeB2" | "sftp" | "ownCloud";
   name: string;
   preset: ProviderPreset;
   bucket: string;

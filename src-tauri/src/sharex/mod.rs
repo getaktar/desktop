@@ -290,6 +290,10 @@ pub fn read_secret(value: Option<&Value>, unprotect: &dyn Fn(&[u8]) -> Option<Ve
 pub enum UploaderKind {
     AmazonS3,
     BackblazeB2,
+    /// An account in `FTPAccountList` with protocol SFTP.
+    Sftp,
+    /// The ownCloud / Nextcloud uploader, which is WebDAV.
+    OwnCloud,
 }
 
 /// A destination found in ShareX's settings, before the review.
@@ -306,6 +310,11 @@ pub struct Candidate {
     /// history entries are matched against; none when it can't be known.
     pub sharex_base_url: Option<String>,
     pub notes: Vec<String>,
+    /// SFTP: the private key's passphrase.
+    pub key_passphrase: Option<String>,
+    /// SFTP: ShareX's `Keypath`, the key file on this PC, read before the
+    /// review (`commands::scan`) into `secret`.
+    pub key_path: Option<String>,
 }
 
 /// Something in ShareX's settings that isn't imported, and why.
@@ -341,10 +350,13 @@ pub fn parse_uploaders_config(text: &str, unprotect: &dyn Fn(&[u8]) -> Option<Ve
     if let Some(candidate) = b2_candidate(root, unprotect) {
         parsed.destinations.push(candidate);
     }
-    let not_storage = t!("Aktar uploads only to S3-compatible storage.");
+    ftp_candidates(root, unprotect, &mut parsed);
+    if let Some(candidate) = owncloud_candidate(root, unprotect) {
+        parsed.destinations.push(candidate);
+    }
+    let not_storage = t!("Aktar uploads only to S3-compatible storage, WebDAV and SFTP.");
     let configured = |key: &str| root.get(key).is_some_and(|value| value.is_object() || value.as_array().is_some_and(|list| !list.is_empty()));
     for (key, name) in [
-        ("FTPAccountList", "FTP"),
         ("ImgurOAuth2Info", "Imgur"),
         ("FlickrOAuthInfo", "Flickr"),
         ("GistOAuth2Info", "GitHub Gist"),
@@ -359,10 +371,8 @@ pub fn parse_uploaders_config(text: &str, unprotect: &dyn Fn(&[u8]) -> Option<Ve
             parsed.skipped.push(Skipped { name: name.into(), reason: not_storage.clone() });
         }
     }
-    for (key, name) in [("OwnCloudHost", "ownCloud / Nextcloud"), ("SeafileAPIURL", "Seafile")] {
-        if root.get(key).and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty()) {
-            parsed.skipped.push(Skipped { name: name.into(), reason: not_storage.clone() });
-        }
+    if root.get("SeafileAPIURL").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty()) {
+        parsed.skipped.push(Skipped { name: "Seafile".into(), reason: not_storage.clone() });
     }
     for (index, uploader) in root.get("CustomUploadersList").and_then(Value::as_array).into_iter().flatten().enumerate() {
         let name = uploader.get("Name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).map_or_else(|| t!("Custom uploader {0}", index + 1), str::to_string);
@@ -497,6 +507,7 @@ fn new_destination(name: String, preset: ProviderPreset) -> DestinationConfig {
         share_page: None,
         encryption: None,
         request_cors_origin: None,
+        ssh_host_key: None,
     }
 }
 
@@ -518,6 +529,12 @@ fn template_with_notes(prefix: &str, notes: &mut Vec<String>) -> String {
 fn secret_notes(secret: &Secret, notes: &mut Vec<String>) {
     if *secret == Secret::Unreadable {
         notes.push(t!("ShareX encrypted this key for another Windows user or PC. Paste the secret key from your provider."));
+    }
+}
+
+fn password_notes(secret: &Secret, notes: &mut Vec<String>) {
+    if *secret == Secret::Unreadable {
+        notes.push(t!("ShareX encrypted this password for another Windows user or PC. Enter the password."));
     }
 }
 
@@ -576,6 +593,8 @@ fn s3_candidate(settings: &Value, unprotect: &dyn Fn(&[u8]) -> Option<Vec<u8>>) 
         secret,
         sharex_base_url,
         notes,
+        key_passphrase: None,
+        key_path: None,
     })
 }
 
@@ -614,6 +633,173 @@ fn b2_candidate(root: &serde_json::Map<String, Value>, unprotect: &dyn Fn(&[u8])
         secret,
         sharex_base_url,
         notes,
+        key_passphrase: None,
+        key_path: None,
+    })
+}
+
+/// `FTPProtocol`: a name (ShareX writes enums as strings) or its number
+/// (FTP 0, FTPS 1, SFTP 2).
+fn ftp_protocol(account: &Value) -> &'static str {
+    match account.get("Protocol") {
+        Some(Value::String(name)) if name.eq_ignore_ascii_case("SFTP") => "SFTP",
+        Some(Value::String(name)) if name.eq_ignore_ascii_case("FTPS") => "FTPS",
+        Some(Value::Number(number)) if number.as_u64() == Some(2) => "SFTP",
+        Some(Value::Number(number)) if number.as_u64() == Some(1) => "FTPS",
+        _ => "FTP",
+    }
+}
+
+/// `BrowserProtocol`: the scheme of the account's links (http 0, https 1,
+/// ftp 2, ftps 3, file 4, sftp 5).
+fn browser_scheme(account: &Value) -> &'static str {
+    const SCHEMES: [&str; 6] = ["http", "https", "ftp", "ftps", "file", "sftp"];
+    match account.get("BrowserProtocol") {
+        Some(Value::String(name)) => SCHEMES.iter().find(|scheme| scheme.eq_ignore_ascii_case(name.trim())).copied().unwrap_or("http"),
+        Some(Value::Number(number)) => number.as_u64().and_then(|index| SCHEMES.get(index as usize)).copied().unwrap_or("http"),
+        _ => "http",
+    }
+}
+
+/// `host`, or `host:port` for a port other than 22 (`[v6]:port` for an
+/// IPv6 address).
+fn sftp_endpoint(host: &str, port: u16) -> String {
+    let bracketed = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+    if port == crate::storage::sftp::DEFAULT_PORT {
+        host.to_string()
+    } else {
+        format!("{bracketed}:{port}")
+    }
+}
+
+/// The accounts in `FTPAccountList`: SFTP ones become SFTP destinations
+/// (`FTPAccount.cs`), plain FTP and FTPS ones are listed as skipped.
+fn ftp_candidates(root: &serde_json::Map<String, Value>, unprotect: &dyn Fn(&[u8]) -> Option<Vec<u8>>, parsed: &mut Parsed) {
+    let Some(accounts) = root.get("FTPAccountList").and_then(Value::as_array) else { return };
+    for (index, account) in accounts.iter().enumerate() {
+        let name = Some(text(account, "Name")).filter(|name| !name.is_empty()).map_or_else(|| t!("FTP account {0}", index + 1), str::to_string);
+        let protocol = ftp_protocol(account);
+        if protocol != "SFTP" {
+            parsed.skipped.push(Skipped { name: format!("{name} ({protocol})"), reason: t!("Plain FTP and FTPS aren’t supported. Use SFTP.") });
+            continue;
+        }
+        match sftp_candidate(account, &name, index, unprotect) {
+            Some(candidate) => parsed.destinations.push(candidate),
+            None => parsed.skipped.push(Skipped { name: format!("{name} (SFTP)"), reason: t!("It has no server or user name.") }),
+        }
+    }
+}
+
+/// One SFTP account. The base folder and path follow
+/// `GetSubFolderPath` / `GetUriPath`: with "auto add sub folder path"
+/// (ShareX's default) the sub folder is part of each file's key, so links
+/// are the HTTP home path plus the key; without it the sub folder is the
+/// base folder, and links are the home path plus the name.
+fn sftp_candidate(account: &Value, name: &str, index: usize, unprotect: &dyn Fn(&[u8]) -> Option<Vec<u8>>) -> Option<Candidate> {
+    let host = text(account, "Host");
+    let user = text(account, "Username");
+    if host.is_empty() || user.is_empty() {
+        return None;
+    }
+    let port = account.get("Port").and_then(Value::as_u64).and_then(|port| u16::try_from(port).ok()).filter(|port| *port > 0).unwrap_or(crate::storage::sftp::DEFAULT_PORT);
+    let mut notes = Vec::new();
+    let mut config = new_destination(format!("ShareX: {name}"), ProviderPreset::Sftp);
+    config.endpoint = sftp_endpoint(host, port);
+    let sub_folder = text(account, "SubFolderPath").replace("%host", host);
+    let auto_add = account.get("HttpHomePathAutoAddSubFolderPath").and_then(Value::as_bool).unwrap_or(true);
+    if auto_add {
+        config.bucket = if sub_folder.starts_with('/') { "/".into() } else { String::new() };
+        config.object_path_template = template_with_notes(&sub_folder, &mut notes);
+    } else {
+        // The folder itself can't change from one upload to the next here.
+        let fixed: Vec<&str> = sub_folder.split('/').take_while(|segment| !segment.contains('%')).collect();
+        let fixed = fixed.join("/");
+        if fixed.len() < sub_folder.len() {
+            notes.push(t!("ShareX’s folder {0} changes with each upload. Aktar uploads into {1}.", sub_folder.as_str(), if fixed.is_empty() { "~" } else { fixed.as_str() }));
+        }
+        config.bucket = fixed.trim_end_matches('/').to_string();
+        config.object_path_template = "{filename}.{ext}".into();
+    }
+
+    // `GetHttpHomePath`, and the host (without "ftp.") when it's empty.
+    let scheme = browser_scheme(account);
+    let home = text(account, "HttpHomePath").replace("%host", host);
+    let sharex_base_url = if !matches!(scheme, "http" | "https") {
+        notes.push(t!("ShareX linked to these files with {0}://. Enter the web address they’re served from as the Public Base URL.", scheme));
+        None
+    } else if home.is_empty() {
+        Some(format!("{scheme}://{}", host.strip_prefix("ftp.").unwrap_or(host)))
+    } else if has_sharex_syntax(&home) || home.contains('%') || home.contains('?') {
+        notes.push(t!("The custom domain {0} uses ShareX syntax. Enter the public URL in the destination’s settings.", home.as_str()));
+        None
+    } else {
+        // A scheme typed into the home path wins (ShareX itself can't
+        // parse one there).
+        let (scheme, rest) = home.split_once("://").unwrap_or((scheme, home.as_str()));
+        Some(format!("{}://{}", scheme.to_ascii_lowercase(), rest.trim_end_matches('/')))
+    };
+    config.public_base_url = sharex_base_url.clone().unwrap_or_default();
+    if flag(account, "HttpHomePathNoExtension") {
+        notes.push(t!("ShareX removed file extensions here; Aktar keeps them."));
+    }
+
+    let key_path = Some(text(account, "Keypath")).filter(|path| !path.is_empty()).map(str::to_string);
+    let secret = if key_path.is_some() { Secret::Missing } else { read_secret(account.get("Password"), unprotect) };
+    password_notes(&secret, &mut notes);
+    let key_passphrase = match read_secret(account.get("Passphrase"), unprotect) {
+        Secret::Known(passphrase) => Some(passphrase),
+        Secret::Unreadable => {
+            notes.push(t!("ShareX encrypted the key’s passphrase for another Windows user or PC. Enter it in the destination’s settings after the import."));
+            None
+        }
+        Secret::Missing => None,
+    };
+    Some(Candidate {
+        review_id: format!("sftp-{index}"),
+        kind: UploaderKind::Sftp,
+        config,
+        access_key_id: user.to_string(),
+        secret,
+        sharex_base_url,
+        notes,
+        key_passphrase: key_passphrase.filter(|_| key_path.is_some()),
+        key_path,
+    })
+}
+
+/// The ownCloud / Nextcloud uploader (`OwnCloud.cs`): WebDAV at
+/// `<host>/remote.php/webdav/<path>`. ShareX made a share link for each
+/// file; Aktar links to the folder's public address instead, which ShareX
+/// doesn't know.
+fn owncloud_candidate(root: &serde_json::Map<String, Value>, unprotect: &dyn Fn(&[u8]) -> Option<Vec<u8>>) -> Option<Candidate> {
+    let settings = Value::Object(root.clone());
+    let host = text(&settings, "OwnCloudHost");
+    let user = text(&settings, "OwnCloudUsername");
+    if host.is_empty() || user.is_empty() {
+        return None;
+    }
+    let mut notes = Vec::new();
+    let mut config = new_destination("ShareX: ownCloud / Nextcloud".into(), ProviderPreset::Webdav);
+    let path = Some(text(&settings, "OwnCloudPath")).filter(|path| !path.is_empty()).unwrap_or("/");
+    let server = with_scheme(host);
+    config.endpoint = combine_url(&combine_url(&server, "remote.php/webdav"), path).trim_end_matches('/').to_string();
+    config.object_path_template = "{filename}.{ext}".into();
+    if crate::storage::webdav_base_url(&config.endpoint).is_err() {
+        notes.push(t!("The Server URL has to start with https://. Only localhost can use http://."));
+    }
+    notes.push(t!("ShareX made a share link for each file. Aktar links to files at the Public Base URL: enter the web address this folder is served from."));
+    let secret = read_secret(settings.get("OwnCloudPassword"), unprotect);
+    password_notes(&secret, &mut notes);
+    Some(Candidate {
+        review_id: "owncloud".into(),
+        kind: UploaderKind::OwnCloud,
+        config,
+        access_key_id: user.to_string(),
+        secret,
+        sharex_base_url: None,
+        notes,
+        key_passphrase: None,
+        key_path: None,
     })
 }
 

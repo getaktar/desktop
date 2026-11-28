@@ -124,6 +124,7 @@ pub fn credentials(token_id: &str, token: &str) -> StorageCredentials {
         session_token: None,
         cloudflare_token: None,
         short_link_token: None,
+        key_passphrase: None,
     }
 }
 
@@ -158,6 +159,7 @@ pub fn destination(name: &str, account: &str, bucket: &str, public_base_url: &st
         share_page: None,
         encryption: None,
         request_cors_origin: None,
+        ssh_host_key: None,
     }
 }
 

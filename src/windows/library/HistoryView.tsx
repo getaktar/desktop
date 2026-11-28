@@ -31,12 +31,12 @@ import {
   TrayItemAddRegular,
 } from "@fluentui/react-icons";
 import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmDialog, ContextMenu, MenuEntries, type ContextMenuState, type MenuEntry } from "../../components/Dialogs";
 import { ExpiryBadge, FileIcon, Thumbnail, useThumbnailURL } from "../../components/FileVisuals";
 import { JobStatusLine } from "../../components/JobStatus";
-import { Preview } from "../../components/Preview";
+import { FallbackImage, Preview } from "../../components/Preview";
 import { QrCodeDialog } from "../../components/QrCodeDialog";
 import { shortLinkMenu } from "../../components/shortLinkMenu";
 import { temporaryLinkMenu } from "../../components/temporaryLinkMenu";
@@ -510,6 +510,9 @@ function UploadDetail(props: {
 }) {
   const { t, locale } = useI18n();
   const { record } = props;
+  /** For a WebDAV or SFTP folder whose public link doesn't load: read
+   * through the destination (Rust refuses it for S3, which has links). */
+  const throughStorage = useCallback(() => api.fetchObjectPreview(record.destinationId, record.objectKey), [record.destinationId, record.objectKey]);
   const [copied, flashCopied] = useFlag();
   const thumbnail = useThumbnailURL(record);
   // With the short link when the upload has one.
@@ -582,6 +585,7 @@ function UploadDetail(props: {
           mediaURL={() => api.recordTemporaryLink(record.id, 3600).catch(() => record.publicUrl)}
           size={record.byteSize}
           onZoom={props.onZoom}
+          throughStorage={throughStorage}
         />
         {props.deletionError && (
           <MessageBar intent="warning">
@@ -660,7 +664,14 @@ function ZoomedPreview({ record, onClose }: { record: UploadRecord | null; onClo
         <DialogBody>
           <DialogTitle>{record?.localFilename}</DialogTitle>
           <DialogContent className="zoom-content checkerboard">
-            {record && <img src={record.publicUrl} alt="" draggable={false} />}
+            {record && (
+              <FallbackImage
+                url={record.publicUrl}
+                filename={record.localFilename}
+                mimeType={record.mimeType}
+                throughStorage={() => api.fetchObjectPreview(record.destinationId, record.objectKey)}
+              />
+            )}
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" onClick={onClose}>

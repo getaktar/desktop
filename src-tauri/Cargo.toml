@@ -1,12 +1,12 @@
 [package]
 name = "aktar"
-version = "0.17.0"
+version = "0.18.0"
 description = "Upload files to your own S3-compatible storage from the Windows tray"
 authors = ["Mert Topuz"]
 license = "MIT"
 repository = "https://github.com/getaktar/desktop"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [lib]
 name = "aktar_lib"
@@ -51,6 +51,10 @@ md-5 = "0.11"
 # WebDAV PROPFIND answers, read by namespace (see `storage::webdav`).
 # Already in the lock file for Tauri's own tools, so nothing new is fetched.
 quick-xml = { version = "0.42", default-features = false }
+# SFTP destinations (see `storage::sftp`): the SSH and SFTP work is the
+# shared core in crates/sftp-core (russh with ring, see its Cargo.toml),
+# which the Mac app uses too.
+aktar-sftp-core = { path = "../crates/sftp-core" }
 
 # Linux keeps secrets in the Secret Service (GNOME Keyring, KWallet), which
 # survives a restart. "linux-native" would be the kernel keyring, which

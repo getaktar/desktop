@@ -107,6 +107,18 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # The SFTP core (crates/sftp-core, shared with the Mac app) on its
+      # own, and against rclone serve sftp.
+      - name: SFTP core
+        working-directory: crates/sftp-core
+        run: |
+          sudo apt-get install -y rclone
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+          cargo test -- --ignored rclone
+          cd ../../src-tauri
+          cargo test --lib sftp -- --ignored
+
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"

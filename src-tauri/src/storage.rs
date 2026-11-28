@@ -1,17 +1,20 @@
 //! Storage backends. Every S3 preset (AWS S3, Cloudflare R2, MinIO,
 //! Backblaze B2, DigitalOcean Spaces, custom) goes through the one
 //! `S3Provider` here, never a separate upload engine per provider, and
-//! WebDAV through `WebdavProvider` (see `webdav.rs`). Callers get either
+//! WebDAV through `WebdavProvider` (see `webdav.rs`) and SFTP through
+//! `SftpProvider` (see `sftp.rs`). Callers get any of them
 //! through `backend` (see `backend.rs`), which is where other kinds of
 //! storage are added; only the S3-only operations (presigned URLs,
 //! lifecycle rules, CORS, multipart sessions) are called on `S3Provider`
 //! itself, after checking the destination's capabilities.
 
 mod backend;
+pub mod sftp;
 mod webdav;
 
 pub use backend::{backend, Backend};
-pub use webdav::WebdavProvider;
+pub use sftp::SftpProvider;
+pub use webdav::{base_url as webdav_base_url, WebdavProvider};
 
 use std::path::Path;
 use std::pin::Pin;
@@ -45,7 +48,7 @@ use crate::expiry::{Removal, RulesStatus};
 use crate::output::{content_disposition, encode_copy_source, resolve_public_url};
 use crate::t;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionResult {
     pub bucket_reachable: bool,
@@ -53,6 +56,17 @@ pub struct ConnectionResult {
     /// What opening the test file's public link returned. None when
     /// nothing was uploaded to open.
     pub public_link: Option<PublicLinkCheck>,
+    /// SFTP: the server's host key (OpenSSH format), which saving the form
+    /// keeps as the destination's `sshHostKey`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<String>,
+    /// SFTP: its SHA-256 fingerprint, `SHA256:...`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key_fingerprint: Option<String>,
+    /// SFTP: the fingerprint of the stored key when the server showed
+    /// another one. Nothing else was tried then (no sign-in).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_host_key_fingerprint: Option<String>,
 }
 
 /// The outcome of opening a link the way someone it's shared with would.
@@ -154,6 +168,30 @@ pub enum StorageError {
     /// followed so the password never goes elsewhere.
     #[error("{}", t!("The server sent this to another address ({0}). Use that address as the Server URL.", .0))]
     Redirected(String),
+    /// SFTP: the server didn't take the user name with the password or key.
+    #[error("{}", t!("Could not sign in. Check your user name, password or key."))]
+    InvalidSshLogin,
+    /// SFTP: an encrypted private key without its passphrase, or with a
+    /// wrong one.
+    #[error("{}", t!("The key’s passphrase is missing or wrong."))]
+    KeyPassphrase,
+    /// SFTP: a private key of a type Aktar can't sign with.
+    #[error("{}", t!("Aktar can’t use this type of key ({0}). Use an ed25519, RSA or ECDSA key.", .0))]
+    UnsupportedKey(String),
+    /// SFTP: the private key's text can't be read.
+    #[error("{}", t!("The private key can’t be read. Paste it in OpenSSH format, starting with -----BEGIN."))]
+    UnreadableKey,
+    /// SFTP: the folder on the server isn't there.
+    #[error("{}", t!("Folder not found on the server ({0}). Check the Folder.", .0))]
+    RemoteFolderNotFound(String),
+    /// SFTP: the server's key isn't the one kept for it, so nothing was
+    /// sent. The fingerprint is the new key's.
+    #[error("{}", t!("The server’s identity has changed ({0}). If you expected this, run Test Connection again and save.", .0))]
+    HostKeyChanged(String),
+    /// SFTP: the server couldn't be reached (refused, timed out, no such
+    /// name), already worded with its host.
+    #[error("{0}")]
+    Unreachable(String),
     #[error("{0}")]
     Unknown(String),
 }
@@ -163,7 +201,7 @@ impl StorageError {
     /// dropped, or the server had a problem. Watched folders try those
     /// again by themselves.
     pub fn is_transient(&self) -> bool {
-        matches!(self, StorageError::Network(_) | StorageError::Connection(_) | StorageError::Server(_))
+        matches!(self, StorageError::Network(_) | StorageError::Connection(_) | StorageError::Server(_) | StorageError::Unreachable(_))
     }
 }
 
@@ -298,7 +336,7 @@ impl S3Provider {
         if writable {
             let _ = self.client.delete_object().bucket(self.bucket()).key(&test_key).send().await;
         }
-        Ok(ConnectionResult { bucket_reachable: true, writable, public_link })
+        Ok(ConnectionResult { bucket_reachable: true, writable, public_link, ..Default::default() })
     }
 
     /// Uploads a file, counting the bytes sent into `progress` as the HTTP
@@ -1395,6 +1433,7 @@ mod tests {
             share_page: None,
             encryption: None,
             request_cors_origin: None,
+            ssh_host_key: None,
         }
     }
 
@@ -1453,6 +1492,7 @@ mod tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         }
     }
 
@@ -1526,6 +1566,7 @@ mod live_tests {
             share_page: None,
             encryption: None,
             request_cors_origin: None,
+            ssh_host_key: None,
         };
         // Moto takes any key unless it's started with authentication on.
         let credentials = StorageCredentials {
@@ -1534,6 +1575,7 @@ mod live_tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         };
         Some(S3Provider::new(config, credentials))
     }

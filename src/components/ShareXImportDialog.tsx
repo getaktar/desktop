@@ -178,7 +178,7 @@ export function ShareXImportDialog({ open, pick, onClose }: { open: boolean; pic
                   <Text size={200} className="secondary break">
                     {t("Read from {0}", review.source)}
                   </Text>
-                  {nothingFound && <Text>{t("ShareX has no S3 or Backblaze B2 uploaders set up.")}</Text>}
+                  {nothingFound && <Text>{t("ShareX has no S3, Backblaze B2, SFTP or ownCloud uploaders set up.")}</Text>}
 
                   {review.destinations.map((destination) => {
                     const current = draft(destination.id);
@@ -193,12 +193,28 @@ export function ShareXImportDialog({ open, pick, onClose }: { open: boolean; pic
                         <div className="consent-grid">
                           <Text className="secondary">{t("Provider")}</Text>
                           <Text>{providerName(destination.preset, t)}</Text>
-                          <Text className="secondary">{t("Bucket")}</Text>
-                          <Text className="mono">{destination.bucket}</Text>
-                          {destination.endpoint && (
+                          {destination.kind === "sftp" ? (
                             <>
-                              <Text className="secondary">{t("Endpoint")}</Text>
+                              <Text className="secondary">{t("Server")}</Text>
                               <Text className="mono selectable break">{destination.endpoint}</Text>
+                              <Text className="secondary">{t("Folder")}</Text>
+                              <Text className="mono">{destination.bucket || "~"}</Text>
+                            </>
+                          ) : destination.kind === "ownCloud" ? (
+                            <>
+                              <Text className="secondary">{t("Server URL")}</Text>
+                              <Text className="mono selectable break">{destination.endpoint}</Text>
+                            </>
+                          ) : (
+                            <>
+                              <Text className="secondary">{t("Bucket")}</Text>
+                              <Text className="mono">{destination.bucket}</Text>
+                              {destination.endpoint && (
+                                <>
+                                  <Text className="secondary">{t("Endpoint")}</Text>
+                                  <Text className="mono selectable break">{destination.endpoint}</Text>
+                                </>
+                              )}
                             </>
                           )}
                           <Text className="secondary">{t("Public Base URL")}</Text>
@@ -217,7 +233,16 @@ export function ShareXImportDialog({ open, pick, onClose }: { open: boolean; pic
                           </Text>
                         ))}
                         {!destination.alreadyInAktar && current.selected && destination.needsSecret && (
-                          <Field label={destination.kind === "backblazeB2" ? t("Application Key") : t("Secret Access Key")} required>
+                          <Field
+                            label={
+                              destination.kind === "backblazeB2"
+                                ? t("Application Key")
+                                : destination.kind === "amazonS3"
+                                  ? t("Secret Access Key")
+                                  : t("Password")
+                            }
+                            required
+                          >
                             <Input
                               type="password"
                               value={current.secret}

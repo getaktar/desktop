@@ -306,7 +306,7 @@ fn lists_what_is_skipped_and_reads_shorteners() {
     });
     let parsed = parse_uploaders_config(&config.to_string(), &no_dpapi).unwrap();
     let skipped: Vec<&str> = parsed.skipped.iter().map(|item| item.name.as_str()).collect();
-    assert_eq!(skipped, ["FTP", "Imgur", "My host", "Broken"]);
+    assert_eq!(skipped, ["Home (FTP)", "Imgur", "My host", "Broken"]);
     assert_eq!(parsed.shorteners.len(), 2);
     let shortener = &parsed.shorteners[0];
     assert_eq!(shortener.review_id, "shortener-0");
@@ -398,4 +398,124 @@ fn reads_picked_files_and_backups() {
 fn compares_endpoints() {
     assert_eq!(comparable_endpoint("https://S3.Example.com/"), "s3.example.com");
     assert_eq!(comparable_endpoint("s3.example.com"), "s3.example.com");
+}
+
+#[test]
+fn imports_sftp_accounts_and_skips_ftp() {
+    // As ShareX writes them (FTPAccount.cs): enums as names, every
+    // property, the password DPAPI-sealed.
+    let config = serde_json::json!({
+        "FTPAccountList": [
+            {
+                "Name": "Web server", "Protocol": "SFTP", "Host": "files.example.com", "Port": 2222, "Username": "deploy",
+                "Password": fake_sealed("hunter2"), "IsActive": false, "SubFolderPath": "i/%y/%mo", "BrowserProtocol": "https",
+                "HttpHomePath": "img.example.com/", "HttpHomePathAutoAddSubFolderPath": true, "HttpHomePathNoExtension": false,
+                "FTPSEncryption": "Explicit", "FTPSCertificateLocation": "", "Keypath": null, "Passphrase": null
+            },
+            {
+                "Name": "Box", "Protocol": 2, "Host": "u1.your-storagebox.de", "Port": 22, "Username": "u1",
+                "Password": null, "SubFolderPath": "/home/www/shots", "BrowserProtocol": 0,
+                "HttpHomePath": "", "HttpHomePathAutoAddSubFolderPath": false, "HttpHomePathNoExtension": true,
+                "Keypath": "C:\\Users\\me\\.ssh\\id_ed25519", "Passphrase": fake_sealed("key words")
+            },
+            { "Name": "Old", "Protocol": "FTP", "Host": "ftp.example.com", "Port": 21, "Username": "me" },
+            { "Name": "Secure", "Protocol": "FTPS", "Host": "ftp.example.com", "Port": 990, "Username": "me" },
+            { "Name": "Empty", "Protocol": "SFTP", "Host": "", "Port": 22 }
+        ]
+    });
+    let parsed = parse_uploaders_config(&config.to_string(), &fake_dpapi).unwrap();
+    let skipped: Vec<&str> = parsed.skipped.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(skipped, ["Old (FTP)", "Secure (FTPS)", "Empty (SFTP)"]);
+    assert_eq!(parsed.destinations.len(), 2);
+
+    let web = &parsed.destinations[0];
+    assert_eq!((web.kind, web.review_id.as_str()), (UploaderKind::Sftp, "sftp-0"));
+    assert_eq!(web.config.preset, ProviderPreset::Sftp);
+    assert_eq!(web.config.name, "ShareX: Web server");
+    assert_eq!(web.config.endpoint, "files.example.com:2222");
+    // The sub folder is in each key, as it is in ShareX's links.
+    assert_eq!(web.config.bucket, "");
+    assert_eq!(web.config.object_path_template, "i/{year}/{month}/{filename}.{ext}");
+    assert_eq!(web.config.public_base_url, "https://img.example.com");
+    assert_eq!(web.access_key_id, "deploy");
+    assert_eq!(web.secret, Secret::Known("hunter2".into()));
+    assert_eq!((web.key_path.as_deref(), web.key_passphrase.as_deref()), (None, None));
+    assert!(web.notes.is_empty(), "{:?}", web.notes);
+    // ShareX's history links are under the base, with the sub folder.
+    let base = web.sharex_base_url.as_deref().unwrap();
+    assert_eq!(object_key_under(base, "https://img.example.com/i/2026/11/shot.png").as_deref(), Some("i/2026/11/shot.png"));
+
+    let box_account = &parsed.destinations[1];
+    assert_eq!(box_account.config.endpoint, "u1.your-storagebox.de");
+    // Without "auto add", the sub folder is the base folder and links are
+    // the home (here the host, over http) plus the name.
+    assert_eq!(box_account.config.bucket, "/home/www/shots");
+    assert_eq!(box_account.config.object_path_template, "{filename}.{ext}");
+    assert_eq!(box_account.config.public_base_url, "http://u1.your-storagebox.de");
+    assert_eq!(box_account.secret, Secret::Missing, "read from the key file before the review");
+    assert_eq!(box_account.key_path.as_deref(), Some("C:\\Users\\me\\.ssh\\id_ed25519"));
+    assert_eq!(box_account.key_passphrase.as_deref(), Some("key words"));
+    assert!(box_account.notes.iter().any(|note| note.contains("extensions")), "{:?}", box_account.notes);
+}
+
+#[test]
+fn reads_sftp_links_and_folders_like_get_uri_path() {
+    let candidate = |account: Value| sftp_candidate(&account, "A", 0, &no_dpapi).unwrap();
+    // %host, "ftp." left off the host, an absolute sub folder in the key.
+    let account = serde_json::json!({ "Host": "ftp.example.com", "Username": "me", "Password": "pw", "SubFolderPath": "/srv/%host/x", "HttpHomePath": "" });
+    let found = candidate(account);
+    assert_eq!(found.config.public_base_url, "http://example.com");
+    assert_eq!(found.config.bucket, "/");
+    assert_eq!(found.config.object_path_template, "srv/ftp.example.com/x/{filename}.{ext}");
+    // Port 22 is left out, an IPv6 address is bracketed with another port.
+    assert_eq!(sftp_endpoint("example.com", 22), "example.com");
+    assert_eq!(sftp_endpoint("2001:db8::1", 2200), "[2001:db8::1]:2200");
+    // A dated folder without "auto add": the fixed part is the folder.
+    let found = candidate(serde_json::json!({ "Host": "h", "Username": "me", "SubFolderPath": "www/i/%y", "HttpHomePathAutoAddSubFolderPath": false, "HttpHomePath": "https://cdn.example.com/i/" }));
+    assert_eq!(found.config.bucket, "www/i");
+    assert_eq!(found.config.public_base_url, "https://cdn.example.com/i");
+    assert_eq!(found.notes.len(), 1);
+    // ShareX syntax or a query in the home path can't be a base URL.
+    for home in ["%host/$prompt$", "example.com/view.php?file="] {
+        let found = candidate(serde_json::json!({ "Host": "h", "Username": "me", "HttpHomePath": home, "BrowserProtocol": "https" }));
+        assert_eq!(found.config.public_base_url, "", "{home}");
+        assert!(found.sharex_base_url.is_none());
+    }
+    // Links over sftp:// aren't web links.
+    let found = candidate(serde_json::json!({ "Host": "h", "Username": "me", "BrowserProtocol": "sftp" }));
+    assert_eq!(found.config.public_base_url, "");
+    // A passphrase only counts with a key file.
+    let found = candidate(serde_json::json!({ "Host": "h", "Username": "me", "Password": "pw", "Passphrase": "x" }));
+    assert_eq!(found.key_passphrase, None);
+    // DPAPI for another user: the review asks for the password.
+    let found = sftp_candidate(&serde_json::json!({ "Host": "h", "Username": "me", "Password": "$DPAPIEncrypted$AAAA" }), "A", 0, &no_dpapi).unwrap();
+    assert_eq!(found.secret, Secret::Unreadable);
+    assert!(found.notes.iter().any(|note| note.contains("password")));
+}
+
+#[test]
+fn imports_owncloud_as_webdav() {
+    let config = serde_json::json!({
+        "OwnCloudHost": "cloud.example.com", "OwnCloudUsername": "me", "OwnCloudPassword": fake_sealed("app password"),
+        "OwnCloudPath": "/ShareX/", "OwnCloudExpiryTime": 7, "OwnCloudCreateShare": true, "OwnCloudDirectLink": false,
+        "OwnCloud81Compatibility": true, "OwnCloudUsePreviewLinks": false, "OwnCloudAppendFileNameToURL": false, "OwnCloudAutoExpire": false
+    });
+    let parsed = parse_uploaders_config(&config.to_string(), &fake_dpapi).unwrap();
+    assert!(parsed.skipped.is_empty(), "{:?}", parsed.skipped);
+    let cloud = &parsed.destinations[0];
+    assert_eq!((cloud.kind, cloud.config.preset), (UploaderKind::OwnCloud, ProviderPreset::Webdav));
+    assert_eq!(cloud.config.endpoint, "https://cloud.example.com/remote.php/webdav/ShareX");
+    assert_eq!((cloud.config.bucket.as_str(), cloud.config.public_base_url.as_str()), ("", ""));
+    assert_eq!(cloud.access_key_id, "me");
+    assert_eq!(cloud.secret, Secret::Known("app password".into()));
+    assert!(cloud.sharex_base_url.is_none(), "share links can't be matched to keys");
+    assert_eq!(cloud.notes.len(), 1);
+    // Plain http to another computer can't be used as it is.
+    let insecure = serde_json::json!({ "OwnCloudHost": "http://nas.example.com/", "OwnCloudUsername": "me", "OwnCloudPassword": "pw", "OwnCloudPath": "" });
+    let parsed = parse_uploaders_config(&insecure.to_string(), &no_dpapi).unwrap();
+    assert_eq!(parsed.destinations[0].config.endpoint, "http://nas.example.com/remote.php/webdav");
+    assert_eq!(parsed.destinations[0].notes.len(), 2);
+    // Not set up: nothing.
+    let empty = serde_json::json!({ "OwnCloudHost": "", "OwnCloudUsername": "", "OwnCloudPath": "/" });
+    assert!(parse_uploaders_config(&empty.to_string(), &no_dpapi).unwrap().destinations.is_empty());
 }

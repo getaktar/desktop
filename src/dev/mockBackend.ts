@@ -377,11 +377,11 @@ export function installMockBackend(route: string) {
         case "list_destinations":
           return [...destinations];
         case "storage_presets":
-          return (["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav"] as const).map((preset) => {
-            const s3 = preset !== "webdav";
+          return (["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav", "sftp"] as const).map((preset) => {
+            const s3 = preset !== "webdav" && preset !== "sftp";
             return {
               preset,
-              kind: s3 ? "s3" : "webdav",
+              kind: s3 ? "s3" : preset,
               capabilities: {
                 upload: true, delete: true, exists: true, publicURL: true, list: true, copy: true,
                 conditionalWrites: preset === "amazonS3" || preset === "cloudflareR2",

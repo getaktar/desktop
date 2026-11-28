@@ -187,6 +187,7 @@ mod tests {
             share_page: None,
             encryption: None,
             request_cors_origin: None,
+            ssh_host_key: None,
         }
     }
 

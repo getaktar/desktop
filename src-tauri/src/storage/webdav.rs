@@ -171,7 +171,7 @@ impl WebdavProvider {
         if writable {
             let _ = self.delete(&test_key).await;
         }
-        Ok(ConnectionResult { bucket_reachable: true, writable, public_link })
+        Ok(ConnectionResult { bucket_reachable: true, writable, public_link, ..Default::default() })
     }
 
     /// Streams the file in one `PUT`, counting the bytes sent into
@@ -808,6 +808,7 @@ mod tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         };
         WebdavProvider::new(config, credentials).unwrap()
     }
@@ -1130,6 +1131,7 @@ mod live_tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         };
         Some(crate::storage::backend(&config, &credentials).unwrap())
     }
@@ -1150,6 +1152,7 @@ mod live_tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         };
         let root = crate::storage::backend(&config, &credentials).unwrap();
         root.create_folder(&decoded(url.path())).await.unwrap();
@@ -1290,6 +1293,7 @@ mod live_tests {
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            key_passphrase: None,
         };
         let missing = crate::storage::backend(&config, &credentials).unwrap();
         assert!(matches!(missing.test_connection().await, Err(StorageError::FolderNotFound)));

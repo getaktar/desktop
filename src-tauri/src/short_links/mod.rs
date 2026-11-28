@@ -323,13 +323,18 @@ pub async fn move_object(
 ) -> Result<MoveStatus, crate::bucket::MoveError> {
     let plan = move_plan(core, destination, from);
     let records = core.history.with_object(&destination.id, from);
-    crate::bucket::copy_for_move(storage, from, new_key, prefixes).await?;
+    // Links that follow need the original kept until they do, so only the
+    // other moves can be a rename (SFTP).
+    let renamed = plan != MovePlan::Update && crate::bucket::rename_for_move(storage, from, new_key, prefixes).await?;
+    if !renamed {
+        crate::bucket::copy_for_move(storage, from, new_key, prefixes).await?;
+    }
     let mut status = MoveStatus::None;
     if plan == MovePlan::Update {
         let new_url = crate::output::resolve_public_url(&destination.public_base_url, new_key);
         status = if update_targets(core, &records, &new_url, destination).await { MoveStatus::Updated } else { MoveStatus::NotUpdated };
     }
-    if status != MoveStatus::NotUpdated {
+    if status != MoveStatus::NotUpdated && !renamed {
         crate::bucket::remove_moved(storage, from, prefixes).await?;
     }
     if plan == MovePlan::Warn {

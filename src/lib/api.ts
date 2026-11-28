@@ -33,7 +33,8 @@ export type ProviderPreset =
   | "backblazeB2"
   | "digitalOceanSpaces"
   | "customS3"
-  | "webdav";
+  | "webdav"
+  | "sftp";
 
 /** The kind of storage a destination is, told by its preset. */
 export type StorageKind = "s3" | "webdav" | "sftp";
@@ -48,7 +49,7 @@ export interface PresetInfo {
 
 /** The kind a preset is, for a destination that didn't come with its own
  * (`list_destinations` fills it in). */
-export const kindOfPreset = (preset: ProviderPreset): StorageKind => (preset === "webdav" ? "webdav" : "s3");
+export const kindOfPreset = (preset: ProviderPreset): StorageKind => (preset === "webdav" ? "webdav" : preset === "sftp" ? "sftp" : "s3");
 
 /** Whether a destination can do what only some kinds of storage can
  * (temporary links, Delete after, Request Files). Asks its capabilities;
@@ -139,6 +140,11 @@ export interface DestinationConfig {
   encryption?: EncryptionMode | null;
   /** The page origin file requests' CORS rule was set up for. */
   requestCorsOrigin?: string | null;
+  /** SFTP: the server's public key (`ssh-ed25519 AAAA...`), trusted on
+   * first use; saving the form keeps the one Test Connection showed. */
+  sshHostKey?: string | null;
+  /** SFTP: its `SHA256:...` fingerprint (from `list_destinations` only). */
+  sshHostKeyFingerprint?: string;
 }
 
 export type EncryptionMode = "link" | "password";
@@ -317,8 +323,11 @@ export const temporaryLinkDurations = [300, 900, 3600, 86_400, 604_800] as const
 
 export interface StorageCredentials {
   accessKeyId: string;
+  /** For SFTP, the password or the private key (`-----BEGIN ...`). */
   secretAccessKey: string;
   sessionToken?: string | null;
+  /** SFTP: an encrypted private key's passphrase. */
+  keyPassphrase?: string | null;
 }
 
 export interface ConnectionResult {
@@ -327,6 +336,12 @@ export interface ConnectionResult {
   /** What opening the test file's public link returned; null when nothing
    * was uploaded to open. */
   publicLink: PublicLinkCheck | null;
+  /** SFTP: the server's key (OpenSSH format) and its fingerprint. */
+  hostKey?: string;
+  hostKeyFingerprint?: string;
+  /** SFTP: the stored key's fingerprint, when the server showed another
+   * one. Nothing else was tried then. */
+  previousHostKeyFingerprint?: string;
 }
 
 export type PublicLinkCheck = { kind: "reachable" } | { kind: "status"; code: number } | { kind: "noResponse" };
@@ -965,6 +980,11 @@ export const api = {
   bucketUpload: (destinationId: string, paths: string[], prefix: string) =>
     invoke<number>("bucket_upload", { destinationId, paths, prefix }),
   fetchRemote: (url: string) => invoke<ArrayBuffer>("fetch_remote", { url }),
+  /** A WebDAV or SFTP file's bytes read through the destination itself,
+   * for a preview whose public link doesn't load (25 MB at most). */
+  fetchObjectPreview: (destinationId: string, key: string) => invoke<ArrayBuffer>("fetch_object_preview", { destinationId, key }),
+  /** "Choose Key File…": the private key's text, or null when cancelled. */
+  readPrivateKeyFile: () => invoke<string | null>("read_private_key_file"),
 
   qrCode: (text: string) => invoke<QrMatrix>("qr_code", { text }),
   copyQrImage: (text: string) => invoke<void>("copy_qr_image", { text }),

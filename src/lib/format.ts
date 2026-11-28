@@ -237,10 +237,17 @@ export function expiryLabel(expiresAt: number, now: number, t: Translate) {
 }
 
 /** Where a destination's files are, wherever a bucket's name is shown: its
- * bucket, or for WebDAV the server's host and folder
- * ("cloud.example.com/remote.php/dav/files/me/aktar"). */
+ * bucket, for WebDAV the server's host and folder
+ * ("cloud.example.com/remote.php/dav/files/me/aktar"), for SFTP the server
+ * and folder ("files.example.com:/var/www/files"). */
 export function storageLocation(destination: Pick<DestinationConfig, "preset" | "bucket" | "endpoint">): string {
-  if (kindOfPreset(destination.preset) === "s3") return destination.bucket;
+  const kind = kindOfPreset(destination.preset);
+  if (kind === "s3") return destination.bucket;
+  if (kind === "sftp") {
+    const server = sftpServerName(destination.endpoint);
+    const folder = destination.bucket.trim();
+    return folder ? `${server}:${folder}` : server;
+  }
   const raw = destination.endpoint.trim();
   try {
     const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
@@ -250,11 +257,30 @@ export function storageLocation(destination: Pick<DestinationConfig, "preset" | 
   }
 }
 
+/** An SFTP server as typed (`host`, `host:port`, `[v6]:port`), without an
+ * `sftp://` in front. */
+function sftpServerName(endpoint: string): string {
+  return endpoint.trim().replace(/^(sftp|ssh):\/\//i, "").split("/")[0];
+}
+
+/** The host of an SFTP server, without the port. */
+function sftpHost(endpoint: string): string {
+  const server = sftpServerName(endpoint);
+  if (server.startsWith("[")) return server.slice(1, server.indexOf("]") > 0 ? server.indexOf("]") : undefined);
+  return (server.match(/:/g) ?? []).length === 1 ? server.split(":")[0] : server;
+}
+
 /** The name of where uploads go, for the root of a bucket browser: the
  * bucket for S3, the last folder of the Server URL (or its host) for
- * another kind. Same as the Mac's `storageRootName`. */
+ * WebDAV, the last folder of the Folder (or the host) for SFTP. Same as
+ * the Mac's `storageRootName`. */
 export function storageRootName(destination: Pick<DestinationConfig, "preset" | "bucket" | "endpoint">): string {
-  if (kindOfPreset(destination.preset) === "s3") return destination.bucket;
+  const kind = kindOfPreset(destination.preset);
+  if (kind === "s3") return destination.bucket;
+  if (kind === "sftp") {
+    const last = destination.bucket.split("/").filter((segment) => segment && segment !== "." && segment !== "~").pop();
+    return last ?? sftpHost(destination.endpoint);
+  }
   const raw = destination.endpoint.trim();
   try {
     const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
@@ -281,6 +307,8 @@ export function providerName(preset: ProviderPreset, t: Translate) {
       return t("Other S3-Compatible");
     case "webdav":
       return "WebDAV";
+    case "sftp":
+      return "SFTP";
   }
 }
 

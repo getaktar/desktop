@@ -7,7 +7,9 @@ import { useI18n, type Translate } from "../lib/i18n";
  * import: why it couldn't reach the bucket at all (`error`), or one line
  * per step of the test, so a bucket that takes uploads but won't serve
  * them reads as a problem instead of a success. `kind` words the hints
- * for a folder on a WebDAV server rather than a bucket. */
+ * for a folder on a WebDAV or SFTP server rather than a bucket. An SFTP
+ * server's key is shown by its fingerprint, and a key that changed comes
+ * first, with nothing else tried. */
 export function ConnectionTestResult({
   result,
   error,
@@ -27,10 +29,33 @@ export function ConnectionTestResult({
     );
   }
   if (!result) return null;
+  if (result.previousHostKeyFingerprint) {
+    return (
+      <div className="test-result">
+        <Text size={200} className="text-error">
+          ✕ {t("The server’s identity has changed. Nothing was sent to it.")}
+        </Text>
+        <Text size={200} className="mono selectable break">
+          {t("Saved key: {0}", result.previousHostKeyFingerprint)}
+        </Text>
+        <Text size={200} className="mono selectable break">
+          {t("Key it shows now: {0}", result.hostKeyFingerprint ?? "?")}
+        </Text>
+        <Text size={200} className="secondary">
+          {t("If you expected this (the server was set up again or moved), test again to sign in with the new key, then save to keep it. If not, don’t save: someone may be in between.")}
+        </Text>
+      </div>
+    );
+  }
   const link = result.publicLink;
   const hint = s3 ? publicLinkHint(link, t) : folderLinkHint(link, t);
   return (
     <div className="test-result">
+      {result.hostKeyFingerprint && (
+        <Text size={200} className="mono selectable break">
+          {t("Server key: {0}", result.hostKeyFingerprint)}
+        </Text>
+      )}
       {result.writable ? (
         <Text size={200} className="text-success">
           ✓ {t("Upload: works")}

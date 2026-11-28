@@ -754,8 +754,17 @@ function ImportReview({
   ];
   const template = destination.outputMode === "custom" ? payload.customTemplate?.trim() : null;
   const rows: [string, string[]][] = [
-    [kindOfPreset(destination.preset) === "s3" ? t("Endpoint") : t("Server URL"), [addressHost(destination.endpoint)]],
-    [t("Bucket"), destination.bucket.trim() ? [destination.bucket] : []],
+    ...((): [string, string[]][] => {
+      switch (kindOfPreset(destination.preset)) {
+        case "s3":
+          return [[t("Endpoint"), [addressHost(destination.endpoint)]], [t("Bucket"), destination.bucket.trim() ? [destination.bucket] : []]];
+        case "webdav":
+          return [[t("Server URL"), [addressHost(destination.endpoint)]]];
+        case "sftp":
+          // The server as typed (addressHost wants a URL), and the folder.
+          return [[t("Server"), [destination.endpoint.trim()]], [t("Folder"), destination.bucket.trim() ? [destination.bucket] : []]];
+      }
+    })(),
     [t("Public Base URL"), destination.publicBaseURL.trim() ? [addressHost(destination.publicBaseURL)] : []],
     [t("Short Links"), destination.shortLinks ? shortLinkHosts(destination.shortLinks, providers) : []],
     [t("After Upload"), unique(webhooks.map((hook) => addressHost(hook.target)))],

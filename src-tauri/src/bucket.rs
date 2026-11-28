@@ -127,9 +127,33 @@ impl From<StorageError> for MoveError {
 /// to the file at the new key between the copy and the delete.
 #[cfg(test)]
 pub async fn move_object(storage: &Backend, from: &str, new_key: &str, prefixes: &[String]) -> Result<(), MoveError> {
+    if rename_for_move(storage, from, new_key, prefixes).await? {
+        return Ok(());
+    }
     copy_for_move(storage, from, new_key, prefixes).await?;
     remove_moved(storage, from, prefixes).await?;
     Ok(())
+}
+
+/// A whole move where the storage moves files by itself (SFTP's
+/// rename), without copying the bytes: the object renamed, its thumbnails
+/// copied and deleted. False where it can't, and nothing was done.
+pub async fn rename_for_move(storage: &Backend, from: &str, new_key: &str, prefixes: &[String]) -> Result<bool, MoveError> {
+    if storage.config().kind() != crate::destinations::StorageKind::Sftp {
+        return Ok(false);
+    }
+    if crate::thumbnails::is_thumbnail(new_key, prefixes) {
+        return Err(MoveError::Storage(StorageError::Unknown(t!("That folder holds this bucket’s thumbnails. Pick another one."))));
+    }
+    if storage.object_exists(new_key).await? {
+        return Err(MoveError::Exists);
+    }
+    if !storage.rename(from, new_key).await? {
+        return Ok(false);
+    }
+    crate::thumbnails::bucket::copy(storage, from, new_key, prefixes).await;
+    crate::thumbnails::bucket::delete(storage, from, prefixes).await?;
+    Ok(true)
 }
 
 /// The first half of a move: the object and its thumbnails copied to

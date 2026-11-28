@@ -272,7 +272,8 @@ export function useBucketBrowser(destination: DestinationConfig) {
 
   /** Previews use presigned links (cached for most of their hour), so they
    * work for private buckets and misconfigured public base URLs alike.
-   * Storage without temporary links (WebDAV) previews the public URL. */
+   * Storage without temporary links (WebDAV, SFTP) previews the public URL,
+   * and the preview reads the file through the storage when that fails. */
   const signsLinks = canDo(destination, "temporaryLinks");
   const previewURL = useCallback(
     async (key: string) => {

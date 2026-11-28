@@ -227,9 +227,27 @@ async fn scan(core: &SharedCore, config: PathBuf, text: Option<String>, history:
     for candidate in parsed.destinations.iter_mut().filter(|candidate| candidate.kind == UploaderKind::BackblazeB2) {
         authorize(candidate).await;
     }
+    for candidate in parsed.destinations.iter_mut().filter(|candidate| candidate.key_path.is_some()) {
+        read_key_file(candidate);
+    }
     let review = review(core, &parsed, &history, source);
     *PENDING.lock().unwrap() = Some(Pending { destinations: parsed.destinations, shorteners: parsed.shorteners, history });
     Ok(review)
+}
+
+/// An SFTP account's key file (ShareX's `Keypath`) as its secret, when
+/// it's on this PC and is a private key. Only its text is kept.
+fn read_key_file(candidate: &mut Candidate) {
+    let Some(path) = candidate.key_path.clone() else { return };
+    let text = std::fs::metadata(&path)
+        .ok()
+        .filter(|metadata| metadata.len() <= 64 * 1024)
+        .and_then(|_| std::fs::read_to_string(&path).ok())
+        .filter(|text| crate::storage::sftp::is_private_key(text));
+    match text {
+        Some(text) => candidate.secret = Secret::Known(text.trim().to_string()),
+        None => candidate.notes.push(t!("The key file {0} can’t be read here. Enter the password, or choose the key in the destination’s settings after the import.", path)),
+    }
 }
 
 /// Asks Backblaze for a B2 destination's endpoint, when its key is known.
@@ -340,9 +358,14 @@ pub async fn sharex_import(core: Core<'_>, choices: ImportChoices) -> Result<Sha
             candidate.secret = Secret::Known(secret.to_string());
         }
         let Secret::Known(secret) = candidate.secret.clone() else {
-            fail(&mut failures, t!("Enter the secret key."));
+            let message = match candidate.kind {
+                UploaderKind::Sftp | UploaderKind::OwnCloud => t!("Enter the password."),
+                UploaderKind::AmazonS3 | UploaderKind::BackblazeB2 => t!("Enter the secret key."),
+            };
+            fail(&mut failures, message);
             continue;
         };
+        let is_key = crate::storage::sftp::is_private_key(&secret);
         if let Some(endpoint) = choice.endpoint.as_deref().map(str::trim).filter(|endpoint| !endpoint.is_empty()) {
             super::apply_typed_endpoint(&mut candidate, endpoint);
         }
@@ -359,6 +382,8 @@ pub async fn sharex_import(core: Core<'_>, choices: ImportChoices) -> Result<Sha
             session_token: None,
             cloudflare_token: None,
             short_link_token: None,
+            // Only with the key it unlocks, not a password typed instead.
+            key_passphrase: candidate.key_passphrase.clone().filter(|_| is_key),
         };
         let mut config = candidate.config.clone();
         config.sanitize();

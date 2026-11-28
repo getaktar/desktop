@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{BucketListing, BucketObject, ConnectionResult, Progress, S3Provider, StorageError, UploadResult, WebdavProvider};
+use super::{BucketListing, BucketObject, ConnectionResult, Progress, S3Provider, SftpProvider, StorageError, UploadResult, WebdavProvider};
 use crate::credentials::StorageCredentials;
 use crate::destinations::{DestinationConfig, StorageKind};
 use crate::output::resolve_public_url;
@@ -17,16 +17,18 @@ use crate::output::resolve_public_url;
 pub enum Backend {
     S3(S3Provider),
     Webdav(WebdavProvider),
+    Sftp(SftpProvider),
 }
 
 /// The backend for `config`'s kind of storage. It can't fail for S3 (the
 /// SDK checks the endpoint only when a request goes out); WebDAV refuses a
-/// server URL it won't send the password to before anything is sent.
+/// server URL it won't send the password to before anything is sent, and
+/// SFTP a server or folder that can't be right.
 pub fn backend(config: &DestinationConfig, credentials: &StorageCredentials) -> Result<Backend, StorageError> {
     match config.kind() {
         StorageKind::S3 => Ok(Backend::S3(S3Provider::new(config.clone(), credentials.clone()))),
         StorageKind::Webdav => Ok(Backend::Webdav(WebdavProvider::new(config.clone(), credentials.clone())?)),
-        StorageKind::Sftp => Err(StorageError::Unsupported),
+        StorageKind::Sftp => Ok(Backend::Sftp(SftpProvider::new(config.clone(), credentials.clone())?)),
     }
 }
 
@@ -35,6 +37,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.config(),
             Backend::Webdav(provider) => provider.config(),
+            Backend::Sftp(provider) => provider.config(),
         }
     }
 
@@ -45,7 +48,7 @@ impl Backend {
     pub fn as_s3(&self) -> Option<&S3Provider> {
         match self {
             Backend::S3(provider) => Some(provider),
-            Backend::Webdav(_) => None,
+            Backend::Webdav(_) | Backend::Sftp(_) => None,
         }
     }
 
@@ -64,6 +67,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.test_connection().await,
             Backend::Webdav(provider) => provider.test_connection().await,
+            Backend::Sftp(provider) => provider.test_connection().await,
         }
     }
 
@@ -81,6 +85,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.upload(path, object_key, content_type, progress, only_if_new).await,
             Backend::Webdav(provider) => provider.upload(path, object_key, content_type, progress, only_if_new).await,
+            Backend::Sftp(provider) => provider.upload(path, object_key, content_type, progress, only_if_new).await,
         }
     }
 
@@ -89,6 +94,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.put_bytes(object_key, data, content_type).await,
             Backend::Webdav(provider) => provider.put_bytes(object_key, data, content_type).await,
+            Backend::Sftp(provider) => provider.put_bytes(object_key, data, content_type).await,
         }
     }
 
@@ -97,6 +103,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.put_page(object_key, html).await,
             Backend::Webdav(provider) => provider.put_page(object_key, html).await,
+            Backend::Sftp(provider) => provider.put_page(object_key, html).await,
         }
     }
 
@@ -105,6 +112,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.get_small(key, max_bytes).await,
             Backend::Webdav(provider) => provider.get_small(key, max_bytes).await,
+            Backend::Sftp(provider) => provider.get_small(key, max_bytes).await,
         }
     }
 
@@ -113,6 +121,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.download(key, destination, max_bytes).await,
             Backend::Webdav(provider) => provider.download(key, destination, max_bytes).await,
+            Backend::Sftp(provider) => provider.download(key, destination, max_bytes).await,
         }
     }
 
@@ -120,6 +129,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.delete(object_key).await,
             Backend::Webdav(provider) => provider.delete(object_key).await,
+            Backend::Sftp(provider) => provider.delete(object_key).await,
         }
     }
 
@@ -127,6 +137,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.delete_many(keys).await,
             Backend::Webdav(provider) => provider.delete_many(keys).await,
+            Backend::Sftp(provider) => provider.delete_many(keys).await,
         }
     }
 
@@ -134,6 +145,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.object_exists(key).await,
             Backend::Webdav(provider) => provider.object_exists(key).await,
+            Backend::Sftp(provider) => provider.object_exists(key).await,
         }
     }
 
@@ -142,6 +154,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.object_info(key).await,
             Backend::Webdav(provider) => provider.object_info(key).await,
+            Backend::Sftp(provider) => provider.object_info(key).await,
         }
     }
 
@@ -162,6 +175,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.list(prefix, continuation_token).await,
             Backend::Webdav(provider) => provider.list(prefix, continuation_token).await,
+            Backend::Sftp(provider) => provider.list(prefix, continuation_token).await,
         }
     }
 
@@ -170,6 +184,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.list_recursively(prefix, continuation_token).await,
             Backend::Webdav(provider) => provider.list_recursively(prefix, continuation_token).await,
+            Backend::Sftp(provider) => provider.list_recursively(prefix, continuation_token).await,
         }
     }
 
@@ -177,6 +192,17 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.copy(source_key, destination_key).await,
             Backend::Webdav(provider) => provider.copy(source_key, destination_key).await,
+            Backend::Sftp(provider) => provider.copy(source_key, destination_key).await,
+        }
+    }
+
+    /// Moves a file within the storage where it can do that by itself
+    /// (SFTP's rename); false when it can't, and the caller copies and
+    /// deletes instead.
+    pub async fn rename(&self, source_key: &str, destination_key: &str) -> Result<bool, StorageError> {
+        match self {
+            Backend::Sftp(provider) => provider.rename(source_key, destination_key).await.map(|()| true),
+            Backend::S3(_) | Backend::Webdav(_) => Ok(false),
         }
     }
 
@@ -184,6 +210,7 @@ impl Backend {
         match self {
             Backend::S3(provider) => provider.create_folder(prefix).await,
             Backend::Webdav(provider) => provider.create_folder(prefix).await,
+            Backend::Sftp(provider) => provider.create_folder(prefix).await,
         }
     }
 

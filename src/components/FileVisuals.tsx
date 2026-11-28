@@ -15,6 +15,7 @@ import {
   TimerRegular,
   VideoRegular,
   BoxRegular,
+  WindowConsoleRegular,
 } from "@fluentui/react-icons";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -63,6 +64,8 @@ export function ProviderIcon({ preset, size = 20 }: { preset: ProviderPreset; si
       return <StorageRegular style={style} />;
     case "webdav":
       return <GlobeRegular style={style} />;
+    case "sftp":
+      return <WindowConsoleRegular style={style} />;
   }
 }
 

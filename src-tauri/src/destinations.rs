@@ -33,6 +33,12 @@ pub enum ProviderPreset {
     /// and password are kept as the access key ID and secret.
     #[serde(rename = "webdav")]
     Webdav,
+    /// Any SSH server with SFTP: OpenSSH, a Hetzner Storage Box, Synology,
+    /// a VPS. `endpoint` is `host` or `host:port`, `bucket` the folder on
+    /// the server, the user name the access key ID and the password or
+    /// private key the secret; the host key is `ssh_host_key`.
+    #[serde(rename = "sftp")]
+    Sftp,
 }
 
 /// The kind of storage a destination is, told by its preset rather than a
@@ -98,6 +104,7 @@ impl ProviderPreset {
             | ProviderPreset::DigitalOceanSpaces
             | ProviderPreset::CustomS3 => StorageKind::S3,
             ProviderPreset::Webdav => StorageKind::Webdav,
+            ProviderPreset::Sftp => StorageKind::Sftp,
         }
     }
 
@@ -132,6 +139,7 @@ impl ProviderPreset {
             ProviderPreset::DigitalOceanSpaces => "digitalOceanSpaces",
             ProviderPreset::CustomS3 => "customS3",
             ProviderPreset::Webdav => "webdav",
+            ProviderPreset::Sftp => "sftp",
         }
     }
 
@@ -144,12 +152,13 @@ impl ProviderPreset {
             ProviderPreset::DigitalOceanSpaces => "DigitalOcean Spaces".into(),
             ProviderPreset::CustomS3 => t!("Other S3-Compatible"),
             ProviderPreset::Webdav => "WebDAV".into(),
+            ProviderPreset::Sftp => "SFTP".into(),
         }
     }
 }
 
 /// Every preset, in the order the destination form offers them.
-pub const PRESETS: [ProviderPreset; 7] = [
+pub const PRESETS: [ProviderPreset; 8] = [
     ProviderPreset::CloudflareR2,
     ProviderPreset::AmazonS3,
     ProviderPreset::MinIO,
@@ -157,6 +166,7 @@ pub const PRESETS: [ProviderPreset; 7] = [
     ProviderPreset::DigitalOceanSpaces,
     ProviderPreset::CustomS3,
     ProviderPreset::Webdav,
+    ProviderPreset::Sftp,
 ];
 
 /// A preset as the destination form gets it, so it can show the fields and
@@ -257,6 +267,11 @@ pub struct DestinationConfig {
     /// bucket. Not transferred to other devices.
     #[serde(default)]
     pub request_cors_origin: Option<String>,
+    /// SFTP: the server's public key in OpenSSH format (`ssh-ed25519
+    /// AAAA...`), trusted on first use. A connection showing another key
+    /// is refused. Not a secret: it travels in QR transfers.
+    #[serde(default)]
+    pub ssh_host_key: Option<String>,
 }
 
 /// A destination as the windows get it: its settings, plus its kind and
@@ -269,11 +284,15 @@ pub struct DestinationView {
     pub config: DestinationConfig,
     pub kind: StorageKind,
     pub capabilities: Capabilities,
+    /// SFTP: the `SHA256:...` fingerprint of `ssh_host_key`, for the form.
+    #[serde(rename = "sshHostKeyFingerprint", skip_serializing_if = "Option::is_none")]
+    pub ssh_host_key_fingerprint: Option<String>,
 }
 
 impl From<DestinationConfig> for DestinationView {
     fn from(config: DestinationConfig) -> Self {
-        Self { kind: config.kind(), capabilities: config.capabilities(), config }
+        let ssh_host_key_fingerprint = config.ssh_host_key.as_deref().and_then(crate::storage::sftp::fingerprint_of);
+        Self { kind: config.kind(), capabilities: config.capabilities(), ssh_host_key_fingerprint, config }
     }
 }
 
@@ -412,11 +431,24 @@ impl DestinationConfig {
     pub(crate) fn sanitize(&mut self) {
         // Only S3 has buckets, regions and path styles; the file keeps
         // the fields, empty (docs/storage-backends.md).
+        // SFTP keeps its folder in `bucket`.
         if self.kind() != StorageKind::S3 {
-            self.bucket.clear();
+            if self.kind() != StorageKind::Sftp {
+                self.bucket.clear();
+            }
             self.region.clear();
             self.force_path_style = false;
             self.account_id = None;
+        }
+        if self.kind() == StorageKind::Sftp {
+            self.bucket = self.bucket.trim().to_string();
+            // Written the one way (no comment), but one this version can't
+            // read is kept as it is: dropping it would trust any server.
+            self.ssh_host_key = self.ssh_host_key.take().map(|key| key.trim().to_string()).filter(|key| !key.is_empty()).map(|key| {
+                crate::storage::sftp::parse_host_key(&key).map_or(key, |parsed| crate::storage::sftp::host_key_text(&parsed))
+            });
+        } else {
+            self.ssh_host_key = None;
         }
         if self.expiry_days.is_some_and(|days| days != 0 && !crate::expiry::is_valid(days)) {
             self.expiry_days = None;
@@ -662,8 +694,11 @@ mod tests {
         assert_eq!(ProviderPreset::Webdav.display_name(), "WebDAV");
         assert_eq!(serde_json::to_value(ProviderPreset::Webdav).unwrap(), "webdav");
         assert_eq!(serde_json::from_str::<ProviderPreset>(r#""webdav""#).unwrap(), ProviderPreset::Webdav);
+        assert_eq!(ProviderPreset::Sftp.kind(), StorageKind::Sftp);
+        assert_eq!(ProviderPreset::Sftp.display_name(), "SFTP");
+        assert_eq!(serde_json::from_str::<ProviderPreset>(r#""sftp""#).unwrap(), ProviderPreset::Sftp);
         // Every preset is offered once, and its raw value is its JSON name.
-        assert_eq!(PRESETS.len(), S3_PRESETS.len() + 1);
+        assert_eq!(PRESETS.len(), S3_PRESETS.len() + 2);
         for preset in PRESETS {
             assert_eq!(serde_json::to_value(preset).unwrap(), preset.raw_value());
         }
@@ -690,6 +725,34 @@ mod tests {
         assert!(webdav.bucket_thumbnails && webdav.share_pages);
         assert!(!webdav.conditional_writes && !webdav.multipart && !webdav.temporary_links);
         assert!(!webdav.expiry_rules && !webdav.file_requests && !webdav.cloudflare_setup);
+        // SFTP: the same as WebDAV.
+        assert_eq!(ProviderPreset::Sftp.capabilities(), webdav);
+    }
+
+    #[test]
+    fn sftp_keeps_its_folder_and_host_key() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ";
+        let json = format!(
+            r#"{{"id":"S","name":"Box","preset":"sftp","endpoint":"files.example.com:2222","region":"auto","bucket":" /var/www/files ","publicBaseURL":"https://files.example.com","objectPathTemplate":"{{uuid}}.{{ext}}","forcePathStyle":true,"sshHostKey":" {key} root@box "}}"#
+        );
+        let mut destination: DestinationConfig = serde_json::from_str(&json).unwrap();
+        destination.sanitize();
+        assert_eq!((destination.bucket.as_str(), destination.region.as_str(), destination.force_path_style), ("/var/www/files", "", false));
+        // Stored the one way, without the comment.
+        assert_eq!(destination.ssh_host_key.as_deref(), Some(key));
+        let saved = serde_json::to_value(&destination).unwrap();
+        assert_eq!(saved["sshHostKey"], key);
+        let view = serde_json::to_value(DestinationView::from(destination.clone())).unwrap();
+        assert_eq!(view["kind"], "sftp");
+        assert!(view["sshHostKeyFingerprint"].as_str().unwrap().starts_with("SHA256:"));
+        // One this version can't read is kept as it is.
+        destination.ssh_host_key = Some("ssh-future AAAA".into());
+        destination.sanitize();
+        assert_eq!(destination.ssh_host_key.as_deref(), Some("ssh-future AAAA"));
+        // Other kinds have no host key.
+        destination.preset = ProviderPreset::Webdav;
+        destination.sanitize();
+        assert_eq!((destination.ssh_host_key.as_deref(), destination.bucket.as_str()), (None, ""));
     }
 
     #[test]

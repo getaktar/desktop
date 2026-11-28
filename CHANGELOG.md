@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SFTP destinations: upload to any SSH server with SFTP (OpenSSH, Hetzner
+  Storage Box, Synology, a VPS) with a server, folder and user name, and a
+  password or a private key (ed25519, RSA or ECDSA in OpenSSH format,
+  pasted or picked with Choose Key File, with an optional passphrase);
+  links come from the Public Base URL. Test Connection shows the server's
+  key fingerprint, and saving keeps the key: a server that later shows
+  another one is refused before anything is sent, and Test Connection
+  shows both fingerprints. Files go up to a part file and are renamed into
+  place, so a link never serves half a file; one connection is reused and
+  closed after a minute without use. Temporary links, Delete after and
+  Request Files are hidden as for WebDAV.
+- Share to Another Device and the local API (`kind: "sftp"`) carry SFTP
+  destinations, their server key and key passphrase included.
+- Import from ShareX brings in SFTP accounts (with their key file when
+  it's on this PC) and the ownCloud / Nextcloud uploader as WebDAV; plain
+  FTP and FTPS accounts are listed as skipped.
+- Previews in the Library: a WebDAV or SFTP folder whose public link
+  doesn't load (no web server, or one that wants a password) is read
+  through the destination itself, up to 25 MB.
+
+### Changed
+
+- Building from source needs Rust 1.89.
+
 ## [0.17.0] - 2026-11-26
 
 ### Added

@@ -18,10 +18,13 @@ import {
   MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
+  Radio,
+  RadioGroup,
   Select,
   Spinner,
   Switch,
   Text,
+  Textarea,
 } from "@fluentui/react-components";
 import { ChevronDownRegular, DismissRegular } from "@fluentui/react-icons";
 import { useEffect, useRef, useState } from "react";
@@ -81,7 +84,7 @@ import { ShortLinksFormSection } from "./ShortLinksFormSection";
 import { isLinux } from "../lib/platform";
 
 /** Offered until `storage_presets` answers, in the same order. */
-const fallbackPresets: ProviderPreset[] = ["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav"];
+const fallbackPresets: ProviderPreset[] = ["cloudflareR2", "amazonS3", "minIO", "backblazeB2", "digitalOceanSpaces", "customS3", "webdav", "sftp"];
 
 const defaultRegion = (preset: ProviderPreset) => (preset === "amazonS3" ? "us-east-1" : kindOfPreset(preset) === "s3" ? "auto" : "");
 
@@ -123,6 +126,24 @@ export function serverURLProblem(raw: string, t: Translate): string | null {
   }
   return t("Enter the folder’s full address, such as https://cloud.example.com/remote.php/dav/files/me/aktar.");
 }
+
+/** Why an SFTP server can't be used, or null: `host`, `host:port` or
+ * `[v6address]:port`, without a user name or path (docs/storage-backends.md). */
+export function sftpServerProblem(raw: string, t: Translate): string | null {
+  const trimmed = raw.trim().replace(/^(sftp|ssh):\/\//i, "");
+  if (trimmed === "") return null;
+  const invalid = t("Enter the server as a host name, such as files.example.com or files.example.com:2222.");
+  if (/[\s@/]/.test(trimmed)) return invalid;
+  const bracketed = /^\[([0-9a-fA-F:.]+)\](?::(\d+))?$/.exec(trimmed);
+  const port = bracketed ? bracketed[2] : (trimmed.match(/:/g) ?? []).length === 1 ? trimmed.split(":")[1] : undefined;
+  if (!bracketed && trimmed.startsWith("[")) return invalid;
+  if (port !== undefined && !(/^\d+$/.test(port) && Number(port) > 0 && Number(port) < 65536)) return invalid;
+  if (!bracketed && (trimmed.match(/:/g) ?? []).length === 1 && trimmed.split(":")[0] === "") return invalid;
+  return null;
+}
+
+/** Whether a secret is a private key rather than a password, as Rust tells. */
+const isPrivateKey = (secret: string) => /^\s*(-----BEGIN|PuTTY-User-Key-File-)/.test(secret);
 
 /** MinIO deployments commonly run without DNS-based virtual-hosted buckets. */
 const defaultForcePathStyle = (preset: ProviderPreset) => preset === "minIO";
@@ -169,6 +190,7 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
   const kind: StorageKind = presetInfo?.kind ?? kindOfPreset(preset);
   const capabilities = presetInfo?.capabilities ?? fallbackCapabilities(preset);
   const isS3 = kind === "s3";
+  const isSftp = kind === "sftp";
   const presets = presetInfos.length > 0 ? presetInfos.map((info) => info.preset) : fallbackPresets;
   const [name, setName] = useState("");
   const [accountID, setAccountID] = useState("");
@@ -176,6 +198,13 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
   const [region, setRegion] = useState("auto");
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
+  /** SFTP: sign in with a password or a private key (both kept in
+   * `secretAccessKey`), and the key's passphrase. */
+  const [sftpAuth, setSftpAuth] = useState<"password" | "key">("password");
+  const [keyPassphrase, setKeyPassphrase] = useState("");
+  const [keyFileError, setKeyFileError] = useState<string | null>(null);
+  /** SFTP: the server key saving keeps; Test Connection fills it in. */
+  const [sshHostKey, setSshHostKey] = useState<string | null>(null);
   const [bucket, setBucket] = useState("");
   const [publicBaseURL, setPublicBaseURL] = useState("");
   const [objectPathTemplate, setObjectPathTemplate] = useState(defaultObjectPathTemplate);
@@ -257,6 +286,10 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     setRegion(existing?.region ?? defaultRegion(initialPreset));
     setAccessKeyId("");
     setSecretAccessKey("");
+    setSftpAuth("password");
+    setKeyPassphrase("");
+    setKeyFileError(null);
+    setSshHostKey(existing?.sshHostKey ?? null);
     setBucket(existing?.bucket ?? "");
     setPublicBaseURL(existing?.publicBaseURL ?? "");
     setObjectPathTemplate(existing?.objectPathTemplate ?? defaultObjectPathTemplate);
@@ -302,10 +335,14 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
   const cleanURLSuggestionHost =
     cleanURLSuggestionDismissed || usesShortCode(objectPathTemplate) ? null : ownDomainHost(publicBaseURL, endpoint);
   const hasNewCredentials = accessKeyId.trim() !== "" && secretAccessKey !== "";
-  const endpointProblem = kind === "webdav" ? serverURLProblem(endpoint, t) : null;
-  /** Only S3 has buckets. */
+  const endpointProblem = kind === "webdav" ? serverURLProblem(endpoint, t) : isSftp ? sftpServerProblem(endpoint, t) : null;
+  const keyProblem =
+    isSftp && sftpAuth === "key" && secretAccessKey.trim() !== "" && !isPrivateKey(secretAccessKey)
+      ? t("Paste the private key itself, starting with -----BEGIN, or choose its file.")
+      : null;
+  /** Only S3 needs a bucket; SFTP's folder may be empty (the login folder). */
   const hasBucket = !isS3 || bucket.trim() !== "";
-  const canTest = endpoint.trim() !== "" && endpointProblem === null && hasBucket && (hasNewCredentials || existing !== null);
+  const canTest = endpoint.trim() !== "" && endpointProblem === null && keyProblem === null && hasBucket && (hasNewCredentials || existing !== null);
   const prefixProblem = thumbnailMode === "bucket" ? thumbnailPrefixProblem(thumbnailPrefix, t) : null;
   const invalidExtensions = parseExtensions(useForExtensions).invalid;
   const extensionsProblem =
@@ -325,6 +362,7 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     hasBucket &&
     endpoint.trim() !== "" &&
     endpointProblem === null &&
+    keyProblem === null &&
     publicBaseURL.trim() !== "" &&
     prefixProblem === null &&
     (existing !== null || hasNewCredentials);
@@ -335,9 +373,9 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     preset,
     accountID: preset === "cloudflareR2" ? accountID.trim() : null,
     endpoint: endpoint.trim(),
-    // WebDAV keeps these fields, empty.
+    // WebDAV keeps these fields, empty; SFTP's folder is in `bucket`.
     region: isS3 ? region.trim() : "",
-    bucket: isS3 ? bucket.trim() : "",
+    bucket: isS3 || isSftp ? bucket.trim() : "",
     publicBaseURL: publicBaseURL.trim(),
     objectPathTemplate: objectPathTemplate.trim() || defaultObjectPathTemplate,
     forcePathStyle: isS3 && forcePathStyle,
@@ -359,6 +397,7 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     encryption,
     // Set up again by the next request when the origin changes.
     requestCorsOrigin: existing?.requestCorsOrigin ?? null,
+    sshHostKey: isSftp ? sshHostKey : null,
   });
 
   /** Null when it claims nothing, so uploads only come here when picked. */
@@ -415,7 +454,30 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
       ? null
       : { format: imageFormat, quality: imageQuality, maxLongEdge: imageMaxLongEdge };
 
-  const credentials = () => (hasNewCredentials ? { accessKeyId, secretAccessKey, sessionToken: null } : null);
+  const credentials = () =>
+    hasNewCredentials
+      ? {
+          accessKeyId,
+          secretAccessKey,
+          sessionToken: null,
+          keyPassphrase: isSftp && sftpAuth === "key" && keyPassphrase !== "" ? keyPassphrase : null,
+        }
+      : null;
+
+  /** "Choose Key File…": its text goes in the field; the file isn't kept. */
+  const chooseKeyFile = async () => {
+    setKeyFileError(null);
+    try {
+      const text = await api.readPrivateKeyFile();
+      if (text !== null) {
+        setSecretAccessKey(text);
+        setTestResult(null);
+        setTestError(null);
+      }
+    } catch (error) {
+      setKeyFileError(errorMessage(error));
+    }
+  };
 
   /** The bucket a rules result is about, so saving can tell whether the
    * connection was edited after it. */
@@ -459,7 +521,11 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
     setTestResult(null);
     setTestError(null);
     try {
-      setTestResult(await api.testConnection(currentConfig(), credentials()));
+      const result = await api.testConnection(currentConfig(), credentials());
+      // The key the server showed is the one saving keeps, a changed one
+      // too: testing again then signs in with it.
+      if (result.hostKey) setSshHostKey(result.hostKey);
+      setTestResult(result);
     } catch (error) {
       setTestError(errorMessage(error));
     } finally {
@@ -625,6 +691,50 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                     </Field>
                   )}
                 </div>
+              ) : isSftp ? (
+                <div className="form-group">
+                  <Field
+                    label={t("Server")}
+                    required
+                    validationMessage={endpointProblem ?? undefined}
+                    hint={t("The host name, with :port when it isn’t 22.")}
+                  >
+                    <Input
+                      value={endpoint}
+                      placeholder="files.example.com"
+                      spellCheck={false}
+                      onChange={(_, data) => {
+                        setEndpoint(data.value);
+                        // Another server has another key.
+                        setSshHostKey(null);
+                        connectionEdited();
+                      }}
+                    />
+                  </Field>
+                  <Field
+                    label={t("Folder")}
+                    hint={t("The folder uploads go into, such as /var/www/files, or one in the login folder, such as files. Empty is the login folder.")}
+                  >
+                    <Input
+                      value={bucket}
+                      placeholder="/var/www/files"
+                      spellCheck={false}
+                      onChange={(_, data) => {
+                        setBucket(data.value);
+                        connectionEdited();
+                      }}
+                    />
+                  </Field>
+                  {sshHostKey && (
+                    <Field label={t("Server Key")}>
+                      <Text size={200} className="mono selectable break">
+                        {sshHostKey === existing?.sshHostKey && existing.sshHostKeyFingerprint
+                          ? existing.sshHostKeyFingerprint
+                          : (testResult?.hostKeyFingerprint ?? sshHostKey)}
+                      </Text>
+                    </Field>
+                  )}
+                </div>
               ) : (
                 <div className="form-group">
                   <Field
@@ -659,15 +769,75 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                     onChange={(_, data) => setAccessKeyId(data.value)}
                   />
                 </Field>
-                <Field label={isS3 ? t("Secret Access Key") : t("Password")} required={!existing}>
-                  <Input
-                    type="password"
-                    value={secretAccessKey}
-                    placeholder={existing ? t("Unchanged") : undefined}
-                    autoComplete="off"
-                    onChange={(_, data) => setSecretAccessKey(data.value)}
-                  />
-                </Field>
+                {isSftp && (
+                  <Field label={t("Sign In With")}>
+                    <RadioGroup
+                      layout="horizontal"
+                      value={sftpAuth}
+                      onChange={(_, data) => {
+                        setSftpAuth(data.value as "password" | "key");
+                        setSecretAccessKey("");
+                        setKeyPassphrase("");
+                        setKeyFileError(null);
+                        setTestResult(null);
+                        setTestError(null);
+                      }}
+                    >
+                      <Radio value="password" label={t("Password")} />
+                      <Radio value="key" label={t("Private Key")} />
+                    </RadioGroup>
+                  </Field>
+                )}
+                {isSftp && sftpAuth === "key" ? (
+                  <>
+                    <Field
+                      label={t("Private Key")}
+                      required={!existing}
+                      validationMessage={keyProblem ?? keyFileError ?? undefined}
+                      hint={t("In OpenSSH format: ed25519, RSA or ECDSA. Only its text is kept, in the system’s password store.")}
+                    >
+                      <Textarea
+                        value={secretAccessKey}
+                        placeholder={existing ? t("Unchanged") : "-----BEGIN OPENSSH PRIVATE KEY-----"}
+                        spellCheck={false}
+                        resize="vertical"
+                        className="mono"
+                        onChange={(_, data) => {
+                          setSecretAccessKey(data.value);
+                          setTestResult(null);
+                          setTestError(null);
+                        }}
+                      />
+                    </Field>
+                    <div>
+                      <Button size="small" onClick={() => void chooseKeyFile()}>
+                        {t("Choose Key File…")}
+                      </Button>
+                    </div>
+                    <Field label={t("Key Passphrase")} hint={t("Only for an encrypted key.")}>
+                      <Input
+                        type="password"
+                        value={keyPassphrase}
+                        autoComplete="off"
+                        onChange={(_, data) => {
+                          setKeyPassphrase(data.value);
+                          setTestResult(null);
+                          setTestError(null);
+                        }}
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <Field label={isS3 ? t("Secret Access Key") : t("Password")} required={!existing}>
+                    <Input
+                      type="password"
+                      value={secretAccessKey}
+                      placeholder={existing ? t("Unchanged") : undefined}
+                      autoComplete="off"
+                      onChange={(_, data) => setSecretAccessKey(data.value)}
+                    />
+                  </Field>
+                )}
               </div>
 
               <Text weight="semibold" className="form-heading">
@@ -691,7 +861,9 @@ export function DestinationForm({ open, existing, onSaved, onCancel }: Props) {
                   hint={
                     isS3
                       ? t("The domain files are served from, for example a custom domain or CDN in front of the bucket.")
-                      : t("The web address this folder is served from. A file’s path in the folder is added to it for its link.")
+                      : isSftp
+                        ? t("The web address a web server serves this folder from: SFTP itself has no links. A file’s path in the folder is added to it for its link.")
+                        : t("The web address this folder is served from. A file’s path in the folder is added to it for its link.")
                   }
                 >
                   <Input

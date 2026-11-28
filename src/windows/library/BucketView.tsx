@@ -40,7 +40,7 @@ import {
 } from "../../components/Dialogs";
 import { ObjectThumbnail, ProviderIcon, useObjectThumbnail } from "../../components/FileVisuals";
 import { Preview } from "../../components/Preview";
-import { api, canDo, errorMessage, temporaryLinkDurations, type BucketObject, type DestinationConfig } from "../../lib/api";
+import { api, canDo, errorMessage, kindOfPreset, temporaryLinkDurations, type BucketObject, type DestinationConfig } from "../../lib/api";
 import {
   folderDisplayName,
   formatBytes,
@@ -564,6 +564,13 @@ function BucketObjectDetail({
   }, [object.key, model.previewURL]);
 
   const thumbnail = useObjectThumbnail(model.destination.id, object);
+  /** WebDAV and SFTP folders without a public link that loads are read
+   * through the storage itself; S3 previews come from presigned links. */
+  const throughStorage = useMemo(
+    () =>
+      kindOfPreset(model.destination.preset) === "s3" ? undefined : () => api.fetchObjectPreview(model.destination.id, object.key),
+    [model.destination.id, model.destination.preset, object.key],
+  );
 
   const copyURL = () => {
     api.copyText(url);
@@ -596,7 +603,7 @@ function BucketObjectDetail({
             {storageLocation(model.destination)}/{parentOfKey(object.key)}
           </Text>
         </header>
-        <Preview url={previewURL} filename={name} browserURL={url} placeholder={thumbnail} size={object.size} />
+        <Preview url={previewURL} filename={name} browserURL={url} placeholder={thumbnail} size={object.size} throughStorage={throughStorage} />
         <LinkSection url={url} copied={copied} onCopy={copyURL} />
         <section className="detail-section">
           <Text weight="semibold" className="secondary">

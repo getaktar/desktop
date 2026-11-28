@@ -95,7 +95,8 @@ pub fn storage_presets() -> Vec<crate::destinations::PresetInfo> {
 fn missing_credentials(config: &DestinationConfig) -> String {
     match config.kind() {
         crate::destinations::StorageKind::S3 => t!("Enter an Access Key ID and Secret Access Key."),
-        _ => t!("Enter a user name and password."),
+        crate::destinations::StorageKind::Sftp => t!("Enter a user name and a password or private key."),
+        crate::destinations::StorageKind::Webdav => t!("Enter a user name and password."),
     }
 }
 
@@ -107,8 +108,33 @@ fn filled(credentials: Option<StorageCredentials>) -> Option<StorageCredentials>
             session_token: c.session_token.filter(|token| !token.trim().is_empty()),
             cloudflare_token: None,
             short_link_token: None,
+            // As typed: a passphrase may start or end with a space.
+            key_passphrase: c.key_passphrase.filter(|passphrase| !passphrase.is_empty()),
         }
     })
+}
+
+/// "Choose Key File…" for an SFTP destination: the private key's text, or
+/// None when the dialog was cancelled. The file itself isn't kept.
+#[tauri::command]
+pub async fn read_private_key_file(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window.dialog().file().set_parent(&window).set_title(t!("Choose a private key file")).pick_file(move |path| {
+        let _ = sender.send(path);
+    });
+    let Some(path) = receiver.await.ok().flatten() else { return Ok(None) };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let not_a_key = || t!("This file isn’t a private key. Pick the key itself (such as id_ed25519), not the .pub file.");
+    let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > 64 * 1024 {
+        return Err(not_a_key());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|_| not_a_key())?;
+    if !crate::storage::sftp::is_private_key(&text) {
+        return Err(not_a_key());
+    }
+    Ok(Some(text.trim().to_string()))
 }
 
 /// Adds a destination (when `config.id` is empty) or updates one. Leaving
@@ -1251,6 +1277,27 @@ pub async fn bucket_upload(core: Core<'_>, destination_id: String, paths: Vec<St
     let count = inputs.len();
     uploads::enqueue(&core, inputs, Some(destination));
     Ok(count)
+}
+
+/// A file's bytes for a preview read through the destination's own
+/// storage rather than its public link: for WebDAV and SFTP folders whose
+/// link doesn't load (no web server, or one that wants a password). In
+/// memory only, at most 25 MB like `fetch_remote`; S3 destinations use
+/// their links (public or presigned) instead.
+#[tauri::command]
+pub async fn fetch_object_preview(core: Core<'_>, destination_id: String, key: String) -> Result<tauri::ipc::Response, String> {
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let destination = core.destinations.find(Some(&destination_id)).filter(|destination| destination.id == destination_id).ok_or_else(|| t!("Preview unavailable"))?;
+    if destination.kind() == crate::destinations::StorageKind::S3 || key.ends_with('/') {
+        return Err(t!("Preview unavailable"));
+    }
+    let keys = credentials::load(&destination.id).map_err(|error| error.to_string())?;
+    let storage = crate::storage::backend(&destination, &keys).map_err(|error| error.to_string())?;
+    match storage.get_small(&key, MAX_BYTES).await {
+        Ok(Some((data, _))) => Ok(tauri::ipc::Response::new(data)),
+        Ok(None) => Err(t!("Preview unavailable")),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Downloads a file for an inline preview (PDF, text, Markdown). Going

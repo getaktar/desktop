@@ -136,6 +136,8 @@ pub fn run() {
             commands::app_info,
             commands::list_destinations,
             commands::storage_presets,
+            commands::read_private_key_file,
+            commands::fetch_object_preview,
             commands::save_destination,
             commands::has_cloudflare_token,
             commands::saved_short_link_provider,
@@ -292,6 +294,22 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     i18n::apply(None);
     let core = Core::new(&handle)?;
     app.manage(core.clone());
+    // An SFTP destination's first connection keeps the server's key
+    // (trust on first use, see storage::sftp).
+    let host_key_core = core.clone();
+    storage::sftp::set_host_key_listener(move |id, endpoint, key| {
+        let mut learned = false;
+        host_key_core.destinations.modify(id, |destination| {
+            // Not for a destination pointed at another server since.
+            if destination.ssh_host_key.is_none() && destination.endpoint.trim() == endpoint {
+                destination.ssh_host_key = Some(key.to_string());
+                learned = true;
+            }
+        });
+        if learned {
+            host_key_core.notify(crate::core::events::DESTINATIONS_CHANGED);
+        }
+    });
     app.manage(PanelState::default());
 
     let settings = core.settings.get();

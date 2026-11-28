@@ -906,7 +906,7 @@ struct DestinationDto {
     id: String,
     name: String,
     provider: &'static str,
-    /// The kind of storage (`s3`, `webdav`), told by `provider`.
+    /// The kind of storage (`s3`, `webdav`, `sftp`), told by `provider`.
     kind: crate::destinations::StorageKind,
     provider_name: String,
     bucket: String,
@@ -1160,5 +1160,7 @@ mod tests {
         assert_eq!((s3["provider"].as_str(), s3["kind"].as_str()), (Some("minIO"), Some("s3")));
         let webdav = dto(&destination("webdav"));
         assert_eq!((webdav["provider"].as_str(), webdav["kind"].as_str(), webdav["providerName"].as_str()), (Some("webdav"), Some("webdav"), Some("WebDAV")));
+        let sftp = dto(&destination("sftp"));
+        assert_eq!((sftp["provider"].as_str(), sftp["kind"].as_str(), sftp["providerName"].as_str()), (Some("sftp"), Some("sftp"), Some("SFTP")));
     }
 }
