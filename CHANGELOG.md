@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-28
+
 ### Added
 
 - SFTP destinations: upload to any SSH server with SFTP (OpenSSH, Hetzner
   Storage Box, Synology, a VPS) with a server, folder and user name, and a
-  password or a private key (ed25519, RSA or ECDSA in OpenSSH format,
+  password or a private key (ed25519, RSA or ECDSA, OpenSSH or PEM,
   pasted or picked with Choose Key File, with an optional passphrase);
   links come from the Public Base URL. Test Connection shows the server's
   key fingerprint, and saving keeps the key: a server that later shows
